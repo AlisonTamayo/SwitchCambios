@@ -1,0 +1,21 @@
+# Ignorar archivos de sistema e IDEs
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Ignorar logs locales
+*.log
+
+# IMPORTANTE: Ignorar el contenido de los microservicios
+# (Porque asumimos que se clonan aparte o son submodulos)
+# MSCompensacionSwitch/
+# Switch-ms-contabilidad/
+# ms-directorio/
+# MSDevolucionSwitch/
+# MSNucleoSwitch/
+
+# Pero NO ignorar el archivo de configuración de Kong
+!kong.yml
+!docker-compose-full.yml

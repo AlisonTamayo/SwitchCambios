@@ -1,0 +1,38 @@
+spring:
+  application:
+    name: ms-contabilidad
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/contabilidad_db}
+    username: ${SPRING_DATASOURCE_USERNAME:postgres}
+    password: ${SPRING_DATASOURCE_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: ${SPRING_JPA_HIBERNATE_DDL_AUTO:validate}
+      naming:
+        physical-strategy: org.hibernate.boot.model.naming.PhysicalNamingStrategyStandardImpl
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        "[format_sql]": true 
+    show-sql: false      # Sin comillas (guion 
+
+server:
+  port: ${SERVER_PORT:8083}
+
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    tags-sorter: alpha       # Sin comillas
+    operations-sorter: alpha # Sin comillas
+
+logging:
+  level:
+    # El linter pide corchetes para claves con puntos
+    root: INFO
+    "[com.switchbank.mscontabilidad]": INFO
+    "[org.springframework.web]": INFO
+    "[org.hibernate]": WARN
+    "[org.springdoc]": INFO

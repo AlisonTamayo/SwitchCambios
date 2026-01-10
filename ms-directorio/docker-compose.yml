@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  # ---------------------------------
+  # BASE DE DATOS (PostgreSQL)
+  # ---------------------------------
+  db-directorio:
+    image: postgres:15-alpine
+    container_name: db_directorio_container
+    restart: always
+    environment:
+      - POSTGRES_DB=bd_directorio
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=admin
+    ports:
+      - "5433:5432"
+    networks:
+      - red-bancaria
+    volumes:
+      - postgres_data_dir:/var/lib/postgresql/data
+
+  # ---------------------------------
+  # MICROSERVICIO (Spring Boot)
+  # ---------------------------------
+  app-directorio:
+    build: .                # <--- Esto le dice que use el Dockerfile para compilar
+    container_name: ms_directorio_container
+    depends_on:
+      - db-directorio
+    environment:
+      # Conexión a la BD usando el nombre del servicio 'db-directorio'
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://db-directorio:5432/bd_directorio
+      - SPRING_DATASOURCE_USERNAME=postgres
+      - SPRING_DATASOURCE_PASSWORD=admin
+      # Hibernate crea las tablas automáticamente
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=update
+    ports:
+      - "8081:8081"         # Accederás por localhost:8081
+    networks:
+      - red-bancaria
+
+networks:
+  red-bancaria:
+    driver: bridge
+
+volumes:
+  postgres_data_dir:

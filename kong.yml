@@ -1,0 +1,56 @@
+_format_version: "3.0"
+
+services:
+  - name: switch-nucleo-service
+    url: http://ms-nucleo:8082
+    routes:
+      - name: ruta-transacciones
+        paths:
+          - /api/v1/transacciones
+        strip_path: false
+        methods:
+          - POST
+    plugins:
+      # AQUÍ YA NO PONGAS PROMETHEUS
+      - name: key-auth
+        config:
+          key_names:
+            - apikey
+      - name: cors
+        config:
+          origins:
+            - "*"
+          methods:
+            - GET
+            - POST
+            - OPTIONS
+
+consumers:
+  - username: NEXUS_BANK
+    keyauth_credentials:
+      - key: NEXUS_SECRET_KEY_123
+
+  - username: ECUSOL_BK
+    keyauth_credentials:
+      - key: PUBLIC_KEY_ECUSOL_67890
+
+  - username: ARCBANK
+    keyauth_credentials:
+      - key: ARCBANK_SECRET_KEY_2025_XYZ
+
+  - username: BANTEC
+    keyauth_credentials:
+      - key: BANTEC_SECRET_KEY_2025
+
+
+# ==========================================
+# PLUGINS GLOBALES (AL FINAL DEL ARCHIVO)
+# ==========================================
+plugins:
+  - name: prometheus
+    config:
+      per_consumer: true       # ¡VITAL! Desglosa por banco
+      status_code_metrics: true # ¡VITAL! Cuenta los 200/500
+      latency_metrics: true     # ¡VITAL! Mide tiempos
+      bandwidth_metrics: true
+      upstream_health_metrics: true
