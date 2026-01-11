@@ -7,6 +7,7 @@ import java.time.LocalDateTime;
 import java.util.Objects;
 import java.util.UUID;
 
+
 @Getter
 @Setter
 @Entity
@@ -62,4 +63,5 @@ public class RespaldoIdempotencia {
                 ", fechaExpiracion=" + fechaExpiracion +
                 '}';
     }
+
 }

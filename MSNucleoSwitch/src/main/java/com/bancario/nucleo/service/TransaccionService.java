@@ -5,10 +5,12 @@ import com.bancario.nucleo.dto.external.InstitucionDTO;
 import com.bancario.nucleo.dto.external.RegistroMovimientoRequest;
 import com.bancario.nucleo.dto.iso.MensajeISO;
 import com.bancario.nucleo.exception.BusinessException;
-import com.bancario.nucleo.model.RespaldoIdempotencia;
-import com.bancario.nucleo.model.Transaccion;
-import com.bancario.nucleo.repository.RespaldoIdempotenciaRepository;
-import com.bancario.nucleo.repository.TransaccionRepository;
+import com.bancario.nucleo.model.TransaccionDocument;
+import com.bancario.nucleo.model.TransaccionDocument.Auditoria;
+import com.bancario.nucleo.model.TransaccionDocument.Datos;
+import com.bancario.nucleo.model.TransaccionDocument.Header;
+import com.bancario.nucleo.model.TransaccionDocument.Idempotencia;
+import com.bancario.nucleo.repository.TransaccionDocumentRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -18,7 +20,16 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeParseException;
+import java.util.HexFormat;
+import java.util.Map;
 import java.util.UUID;
 
 @Slf4j
@@ -26,8 +37,7 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class TransaccionService {
 
-    private final TransaccionRepository transaccionRepository;
-    private final RespaldoIdempotenciaRepository idempotenciaRepository;
+    private final TransaccionDocumentRepository transaccionRepository;
     private final RestTemplate restTemplate;
 
     // --- URLs DE LOS MICROSERVICIOS ---
@@ -44,89 +54,74 @@ public class TransaccionService {
     private static final Integer CICLO_ACTUAL_ID = 1;
 
     /**
-     * Procesa una transacción bajo el estándar ISO 20022.
-     * Flujo: Validación -> Contabilidad (Ledger) -> Compensación (Clearing) -> Notificación (Webhook).
+     * Procesa una transacción bajo el estándar ISO 20022 de forma documental e idempotente.
+     * Flujo: Persistencia inicial (RECEIVED) -> Validaciones -> Ledger -> Compensación -> Webhook -> COMPLETED/FAILED.
      */
     @Transactional
     public TransaccionResponseDTO procesarTransaccionIso(MensajeISO iso) {
-        // 1. EXTRACCIÓN DE DATOS ISO
         UUID idInstruccion = UUID.fromString(iso.getBody().getInstructionId());
         String bicOrigen = iso.getHeader().getOriginatingBankId();
         String bicDestino = iso.getBody().getCreditor().getTargetBankId();
         BigDecimal monto = iso.getBody().getAmount().getValue();
         String moneda = iso.getBody().getAmount().getCurrency();
         String messageId = iso.getHeader().getMessageId();
+        Instant now = Instant.now();
 
         log.info(">>> Iniciando Tx ISO: InstID={} MsgID={} Monto={}", idInstruccion, messageId, monto);
 
-        // 2. IDEMPOTENCIA
-        if (transaccionRepository.existsById(idInstruccion)) {
+        // 1. IDEMPOTENCIA (instructionId como _id nativo)
+        TransaccionDocument existente = transaccionRepository.findById(idInstruccion).orElse(null);
+        if (existente != null) {
             log.warn("Transacción duplicada detectada: {}", idInstruccion);
-            return obtenerTransaccion(idInstruccion);
+            return mapToDTO(existente);
         }
 
-        // 3. PERSISTENCIA INICIAL (Estado RECEIVED)
-        Transaccion tx = new Transaccion();
-        tx.setIdInstruccion(idInstruccion);
-        tx.setIdMensaje(messageId);
-        tx.setReferenciaRed("SWITCH-" + System.currentTimeMillis());
-        tx.setMonto(monto);
-        tx.setMoneda(moneda);
-        tx.setCodigoBicOrigen(bicOrigen);
-        tx.setCodigoBicDestino(bicDestino);
-        tx.setEstado("RECEIVED");
-        tx.setFechaCreacion(LocalDateTime.now());
-        
-        tx = transaccionRepository.save(tx);
+        // 2. PERSISTENCIA INICIAL EN MONGO (estado RECEIVED)
+        TransaccionDocument tx = inicializarDocumento(iso, idInstruccion, bicOrigen, bicDestino, monto, moneda, now);
+        transaccionRepository.save(tx);
 
         try {
-            // 4. VALIDACIÓN CON DIRECTORIO
+            // 3. VALIDACIÓN CON DIRECTORIO
             validarBanco(bicOrigen); // Validar emisor
             InstitucionDTO bancoDestinoInfo = validarBanco(bicDestino); // Validar receptor y obtener URL
+            marcarEstado(tx, "ROUTED", "Bancos validados en Directorio");
 
-            // 5. LEDGER: MOVIMIENTO DE DINERO REAL (Cuentas Técnicas)
-            // 5.1 Debitar al Origen
-            log.info("Ledger: Debitando {} a {}", monto, bicOrigen);
+            // 4. LEDGER: MOVIMIENTO DE DINERO REAL (Cuentas Técnicas)
             registrarMovimientoContable(bicOrigen, idInstruccion, monto, "DEBIT");
-
-            // 5.2 Acreditar al Destino
-            log.info("Ledger: Acreditando {} a {}", monto, bicDestino);
             registrarMovimientoContable(bicDestino, idInstruccion, monto, "CREDIT");
 
-            // 6. COMPENSACIÓN: ACUMULACIÓN DE SALDOS (Clearing)
-            // Esto actualiza la tabla de posiciones netas para el cierre del día
-            log.info("Clearing: Registrando posiciones en Ciclo {}", CICLO_ACTUAL_ID);
+            // 5. COMPENSACIÓN: ACUMULACIÓN DE SALDOS (Clearing)
             notificarCompensacion(bicOrigen, monto, true);  // Origen DEBE (Débito)
             notificarCompensacion(bicDestino, monto, false); // Destino TIENE A FAVOR (Crédito)
 
-            // 7. NOTIFICACIÓN AL BANCO DESTINO (PUSH / Webhook)
+            // 6. NOTIFICACIÓN AL BANCO DESTINO (PUSH / Webhook)
             String urlWebhook = bancoDestinoInfo.getUrlDestino();
             log.info("Webhook: Notificando a {}", urlWebhook);
             try {
                 restTemplate.postForEntity(urlWebhook, iso, String.class);
                 log.info("Webhook: Entregado exitosamente.");
             } catch (Exception e) {
-                // Si falla el webhook, no revertimos el dinero (ya está en Ledger), pero alertamos.
                 log.error("Webhook: Falló la entrega. El banco destino deberá conciliar manualmente. Error: {}", e.getMessage());
             }
 
-            // 8. FINALIZACIÓN EXITOSA
-            tx.setEstado("COMPLETED");
-            guardarRespaldoIdempotencia(tx, "EXITO");
+            // 7. FINALIZACIÓN EXITOSA
+            marcarEstado(tx, "COMPLETED", "Orquestación completada");
+            TransaccionResponseDTO respuesta = mapToDTO(tx);
+            guardarIdempotencia(tx, respuesta);
+            transaccionRepository.save(tx);
+            return respuesta;
 
         } catch (Exception e) {
-            log.error("Error crítico en Tx: {}", e.getMessage());
-            tx.setEstado("FAILED");
-            // Aquí, si falló en el paso 5.2, el sistema debería tener una reversa automática.
-            // Para el alcance actual, el estado FAILED indica intervención manual requerida si hubo débito parcial.
+            log.error("Error crítico en Tx: {}", e.getMessage(), e);
+            marcarEstado(tx, "FAILED", e.getMessage());
+            guardarIdempotencia(tx, Map.of("estado", tx.getEstado(), "error", e.getMessage()));
+            transaccionRepository.save(tx);
+            return mapToDTO(tx);
         }
-
-        Transaccion saved = transaccionRepository.save(tx);
-        return mapToDTO(saved);
     }
 
     public TransaccionResponseDTO obtenerTransaccion(UUID id) {
-        Transaccion tx = transaccionRepository.findById(id)
+        TransaccionDocument tx = transaccionRepository.findById(id)
                 .orElseThrow(() -> new BusinessException("Transacción no encontrada"));
         return mapToDTO(tx);
     }
@@ -168,41 +163,106 @@ public class TransaccionService {
      */
     private void notificarCompensacion(String bic, BigDecimal monto, boolean esDebito) {
         try {
-            // URL: POST /api/v1/compensacion/ciclos/{id}/acumular?bic=...&monto=...&esDebito=...
             String url = String.format("%s/api/v1/compensacion/ciclos/%d/acumular?bic=%s&monto=%s&esDebito=%s",
                     compensacionUrl, CICLO_ACTUAL_ID, bic, monto.toString(), esDebito);
-            
+
             restTemplate.postForEntity(url, null, Void.class);
-            
+
         } catch (Exception e) {
-            // Un fallo en compensación es grave administrativamente, pero no debe detener la transacción en tiempo real.
             log.error("ALERTA: Fallo al registrar compensación para {}. Descuadre en Clearing.", bic, e);
         }
     }
 
-    private void guardarRespaldoIdempotencia(Transaccion tx, String resultado) {
-        RespaldoIdempotencia respaldo = new RespaldoIdempotencia();
-        // Usamos constructor vacío para que @MapsId funcione correctamente
-        respaldo.setHashContenido("HASH_" + tx.getIdInstruccion()); 
-        respaldo.setCuerpoRespuesta("{ \"estado\": \"" + resultado + "\" }");
-        respaldo.setFechaExpiracion(LocalDateTime.now().plusDays(1));
-        respaldo.setTransaccion(tx);
-        idempotenciaRepository.save(respaldo);
+    // --- CONSTRUCCIÓN DOCUMENTAL / IDEMPOTENCIA ---
+
+    private TransaccionDocument inicializarDocumento(MensajeISO iso, UUID idInstruccion, String bicOrigen, String bicDestino,
+                                                     BigDecimal monto, String moneda, Instant now) {
+        Instant fechaCreacion = parseCreationDateTime(iso.getHeader().getCreationDateTime(), now);
+        String referenciaRed = "SWITCH-" + now.toEpochMilli();
+        String debtorAccount = iso.getBody().getDebtor() != null ? iso.getBody().getDebtor().getAccountId() : null;
+        String creditorAccount = iso.getBody().getCreditor() != null ? iso.getBody().getCreditor().getAccountId() : null;
+
+        TransaccionDocument tx = TransaccionDocument.builder()
+                .id(idInstruccion)
+                .hashIdempotencia(calcularHashIdempotencia(idInstruccion, monto, moneda, bicOrigen, bicDestino, fechaCreacion))
+                .header(Header.builder()
+                        .messageId(iso.getHeader().getMessageId())
+                        .bicOrigen(bicOrigen)
+                        .bicDestino(bicDestino)
+                        .fechaCreacion(fechaCreacion)
+                        .build())
+                .datos(Datos.builder()
+                        .monto(monto)
+                        .moneda(moneda)
+                        .referenciaRed(referenciaRed)
+                        .endToEndId(iso.getBody().getEndToEndId())
+                        .remittanceInformation(iso.getBody().getRemittanceInformation())
+                        .debtorAccount(debtorAccount)
+                        .creditorAccount(creditorAccount)
+                        .build())
+                .estado("RECEIVED")
+                .build();
+
+        marcarEstado(tx, "RECEIVED", "Mensaje ISO recibido");
+        return tx;
+    }
+
+    private void marcarEstado(TransaccionDocument tx, String estado, String detalle) {
+        tx.setEstado(estado);
+        tx.getAuditoria().add(Auditoria.builder()
+                .estado(estado)
+                .timestamp(Instant.now())
+                .detalle(detalle)
+                .build());
+    }
+
+    private void guardarIdempotencia(TransaccionDocument tx, Object cuerpo) {
+        tx.setIdempotencia(Idempotencia.builder()
+                .cuerpoRespuesta(cuerpo)
+                .createdAt(Instant.now())
+                .build());
+    }
+
+    private String calcularHashIdempotencia(UUID idInstruccion, BigDecimal monto, String moneda, String bicOrigen,
+                                            String bicDestino, Instant fechaCreacion) {
+        try {
+            String raw = idInstruccion + "|" + monto.toPlainString() + "|" + moneda + "|" + bicOrigen + "|" + bicDestino + "|" + fechaCreacion;
+            MessageDigest md = MessageDigest.getInstance("MD5");
+            return HexFormat.of().formatHex(md.digest(raw.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("No se pudo calcular el hash de idempotencia", e);
+        }
+    }
+
+    private Instant parseCreationDateTime(String rawDate, Instant fallback) {
+        if (rawDate == null || rawDate.isBlank()) {
+            return fallback;
+        }
+        try {
+            return OffsetDateTime.parse(rawDate).toInstant();
+        } catch (DateTimeParseException ex) {
+            log.warn("No se pudo parsear creationDateTime '{}', usando fallback UTC", rawDate);
+            return fallback;
+        }
     }
 
     // --- MAPPERS ---
 
-    private TransaccionResponseDTO mapToDTO(Transaccion tx) {
+    private TransaccionResponseDTO mapToDTO(TransaccionDocument tx) {
+        LocalDateTime fechaCreacion = tx.getHeader() != null && tx.getHeader().getFechaCreacion() != null
+                ? LocalDateTime.ofInstant(tx.getHeader().getFechaCreacion(), ZoneOffset.UTC)
+                : null;
+
         return TransaccionResponseDTO.builder()
-                .idInstruccion(tx.getIdInstruccion())
-                .idMensaje(tx.getIdMensaje())
-                .referenciaRed(tx.getReferenciaRed())
-                .monto(tx.getMonto())
-                .moneda(tx.getMoneda())
-                .codigoBicOrigen(tx.getCodigoBicOrigen())
-                .codigoBicDestino(tx.getCodigoBicDestino())
+                .idInstruccion(tx.getId())
+                .idMensaje(tx.getHeader() != null ? tx.getHeader().getMessageId() : null)
+                .referenciaRed(tx.getDatos() != null ? tx.getDatos().getReferenciaRed() : null)
+                .monto(tx.getDatos() != null ? tx.getDatos().getMonto() : null)
+                .moneda(tx.getDatos() != null ? tx.getDatos().getMoneda() : null)
+                .codigoBicOrigen(tx.getHeader() != null ? tx.getHeader().getBicOrigen() : null)
+                .codigoBicDestino(tx.getHeader() != null ? tx.getHeader().getBicDestino() : null)
                 .estado(tx.getEstado())
-                .fechaCreacion(tx.getFechaCreacion())
+                .fechaCreacion(fechaCreacion)
                 .build();
     }
 }
