@@ -26,13 +26,13 @@ public class CuentaTecnica {
     @Column(name = "firmaIntegridad", nullable = false)
     private String firmaIntegridad;
 
-    public CuentaTecnica() {}
+    public CuentaTecnica() {
+    }
 
-    // Constructor para inicializar
     public CuentaTecnica(String codigoBic) {
         this.codigoBic = codigoBic;
-        // CORRECCIÓN: Nacer con 2 decimales
+
         this.saldoDisponible = BigDecimal.ZERO.setScale(2, java.math.RoundingMode.HALF_UP);
-        this.firmaIntegridad = "INITIAL_HASH"; 
+        this.firmaIntegridad = "INITIAL_HASH";
     }
 }

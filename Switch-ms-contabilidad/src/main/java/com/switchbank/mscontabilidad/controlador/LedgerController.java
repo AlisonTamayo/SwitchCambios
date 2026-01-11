@@ -33,13 +33,11 @@ public class LedgerController {
         try {
             return ResponseEntity.ok(service.registrarMovimiento(req));
         } catch (RuntimeException e) {
-            e.printStackTrace(); // Ver error en logs de Docker
-            // Devolver el mensaje de error al cliente (Postman/Curl)
+            e.printStackTrace();
             return ResponseEntity.badRequest().body(new ApiError(e.getMessage()));
         }
     }
 
-    // Clase interna simple para devolver JSON de error
     @lombok.Data
     @lombok.AllArgsConstructor
     static class ApiError {

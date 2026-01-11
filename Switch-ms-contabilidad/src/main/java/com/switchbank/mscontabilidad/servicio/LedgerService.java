@@ -17,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.util.Base64;
+import java.util.UUID;
 
 @Service
 public class LedgerService {
@@ -47,15 +48,14 @@ public class LedgerService {
         CuentaTecnica cuenta = cuentaRepo.findByCodigoBic(req.getCodigoBic())
                 .orElseThrow(() -> new RuntimeException("Cuenta no encontrada para BIC: " + req.getCodigoBic()));
 
-        // 1. Validar integridad antes de operar
         String hashActual = calcularHash(cuenta);
         if (!hashActual.equals(cuenta.getFirmaIntegridad())) {
-            throw new RuntimeException("ALERTA DE SEGURIDAD: La cuenta " + req.getCodigoBic() + " ha sido alterada manualmente.");
+            throw new RuntimeException(
+                    "ALERTA DE SEGURIDAD: La cuenta " + req.getCodigoBic() + " ha sido alterada manualmente.");
         }
 
         TipoMovimiento tipo = TipoMovimiento.valueOf(req.getTipo());
 
-        // 2. Lógica de Saldo
         if (tipo == TipoMovimiento.DEBIT) {
             if (cuenta.getSaldoDisponible().compareTo(req.getMonto()) < 0) {
                 throw new RuntimeException("FONDOS INSUFICIENTES para el banco: " + req.getCodigoBic());
@@ -65,7 +65,6 @@ public class LedgerService {
             cuenta.setSaldoDisponible(cuenta.getSaldoDisponible().add(req.getMonto()));
         }
 
-        // 3. Registrar Movimiento
         Movimiento mov = new Movimiento();
         mov.setCuenta(cuenta);
         mov.setIdInstruccion(req.getIdInstruccion());
@@ -75,32 +74,67 @@ public class LedgerService {
         mov.setFechaRegistro(LocalDateTime.now());
         movimientoRepo.save(mov);
 
-        // 4. Actualizar Hash de Integridad y Guardar Cuenta
         cuenta.setFirmaIntegridad(calcularHash(cuenta));
         CuentaTecnica saved = cuentaRepo.save(cuenta);
 
         return mapToDTO(saved);
     }
 
-    @Transactional(readOnly = true)
     public CuentaDTO obtenerCuenta(String bic) {
         CuentaTecnica cuenta = cuentaRepo.findByCodigoBic(bic)
                 .orElseThrow(() -> new RuntimeException("Cuenta no encontrada"));
         return mapToDTO(cuenta);
     }
 
-    // --- Utilidades ---
+    @Transactional(readOnly = true)
+    public boolean verificarSaldo(String bic, BigDecimal monto) {
+        return cuentaRepo.findByCodigoBic(bic)
+                .map(cuenta -> cuenta.getSaldoDisponible().compareTo(monto) >= 0)
+                .orElse(false);
+    }
+
+    @Transactional
+    public CuentaDTO recargarSaldo(String bic, BigDecimal monto, UUID idInstruccion) {
+
+        if (movimientoRepo.findByIdInstruccion(idInstruccion).isPresent()) {
+
+            CuentaTecnica cuenta = cuentaRepo.findByCodigoBic(bic)
+                    .orElseThrow(() -> new RuntimeException("Cuenta no encontrada"));
+            return mapToDTO(cuenta);
+        }
+
+        CuentaTecnica cuenta = cuentaRepo.findByCodigoBic(bic)
+                .orElseThrow(() -> new RuntimeException("Cuenta no encontrada para BIC: " + bic));
+
+        String hashActual = calcularHash(cuenta);
+        if (!hashActual.equals(cuenta.getFirmaIntegridad())) {
+            throw new RuntimeException("ALERTA: Integridad comprometida en cuenta " + bic);
+        }
+
+        cuenta.setSaldoDisponible(cuenta.getSaldoDisponible().add(monto));
+
+        Movimiento mov = new Movimiento();
+        mov.setCuenta(cuenta);
+        mov.setIdInstruccion(idInstruccion);
+        mov.setTipo(TipoMovimiento.RECHARGE);
+        mov.setMonto(monto);
+        mov.setSaldoResultante(cuenta.getSaldoDisponible());
+        mov.setFechaRegistro(LocalDateTime.now());
+        movimientoRepo.save(mov);
+
+        cuenta.setFirmaIntegridad(calcularHash(cuenta));
+        return mapToDTO(cuentaRepo.save(cuenta));
+    }
 
     private String calcularHash(CuentaTecnica c) {
         try {
-            // CORRECCIÓN: Forzamos siempre 2 decimales (Scale 2) para evitar problemas de "0" vs "0.00"
-            // RoundingMode.HALF_UP es el estándar bancario común.
+
             String saldoFormateado = c.getSaldoDisponible()
                     .setScale(2, java.math.RoundingMode.HALF_UP)
                     .toString();
 
             String data = c.getCodigoBic() + ":" + saldoFormateado;
-            
+
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             byte[] hash = digest.digest(data.getBytes(StandardCharsets.UTF_8));
             return Base64.getEncoder().encodeToString(hash);

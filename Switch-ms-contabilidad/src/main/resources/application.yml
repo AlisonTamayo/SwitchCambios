@@ -15,7 +15,7 @@ spring:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
         "[format_sql]": true 
-    show-sql: false      # Sin comillas (guion 
+    show-sql: false     
 
 server:
   port: ${SERVER_PORT:8083}
@@ -25,12 +25,12 @@ springdoc:
     path: /api-docs
   swagger-ui:
     path: /swagger-ui.html
-    tags-sorter: alpha       # Sin comillas
-    operations-sorter: alpha # Sin comillas
+    tags-sorter: alpha      
+    operations-sorter: alpha 
 
 logging:
   level:
-    # El linter pide corchetes para claves con puntos
+
     root: INFO
     "[com.switchbank.mscontabilidad]": INFO
     "[org.springframework.web]": INFO

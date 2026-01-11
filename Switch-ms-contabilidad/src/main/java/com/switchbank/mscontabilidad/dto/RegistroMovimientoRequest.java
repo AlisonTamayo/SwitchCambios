@@ -6,8 +6,8 @@ import java.util.UUID;
 
 @Data
 public class RegistroMovimientoRequest {
-    private String codigoBic;      // A quién afectamos
-    private UUID idInstruccion;    // Referencia al Núcleo
+    private String codigoBic;
+    private UUID idInstruccion;
     private BigDecimal monto;
-    private String tipo;           // "CREDIT" o "DEBIT"
+    private String tipo;
 }
