@@ -1,19 +1,19 @@
 package com.bancario.msdirectorio.service;
 
+import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.lang.NonNull; // Importante para la seguridad de tipos
+import org.springframework.stereotype.Service;
+
 import com.bancario.msdirectorio.model.Institucion;
 import com.bancario.msdirectorio.model.InterruptorCircuito;
 import com.bancario.msdirectorio.model.ReglaEnrutamiento;
 import com.bancario.msdirectorio.repository.InstitucionRepository;
-import com.bancario.msdirectorio.repository.InterruptorRepository;
-import com.bancario.msdirectorio.repository.ReglaEnrutamientoRepository;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-
-import java.time.LocalDateTime;
-import java.time.temporal.ChronoUnit;
-import java.util.List;
-import java.util.Optional;
 
 @Service
 public class DirectorioService {
@@ -21,34 +21,26 @@ public class DirectorioService {
     @Autowired
     private InstitucionRepository institucionRepository;
 
-    @Autowired
-    private ReglaEnrutamientoRepository reglaRepository;
-
-    @Autowired
-    private InterruptorRepository interruptorRepository; // <--- NUEVO
-
-    // --- Lógica para Instituciones ---
-
-    @Transactional
-    public Institucion registrarInstitucion(Institucion institucion) {
-        if (institucionRepository.existsByCodigoBic(institucion.getCodigoBic())) {
-            throw new RuntimeException("El banco con BIC " + institucion.getCodigoBic() + " ya existe.");
+    public Institucion registrarInstitucion(@NonNull Institucion institucion) {
+        // Validación manual para eliminar el Warning y asegurar integridad
+        if (institucion.get_id() == null) {
+            throw new IllegalArgumentException("El BIC (_id) no puede ser nulo");
         }
 
-        // 1. Guardamos la Institución
-        Institucion guardada = institucionRepository.save(institucion);
+        if (institucionRepository.existsById(institucion.get_id())) {
+            throw new RuntimeException("El banco con BIC " + institucion.get_id() + " ya existe.");
+        }
 
+        // Inicializaciones seguras
+        if (institucion.getInterruptorCircuito() == null) {
+            institucion.setInterruptorCircuito(new InterruptorCircuito(false, 0, null));
+        }
         
-        InterruptorCircuito interruptor = new InterruptorCircuito();
-        
-        interruptor.setInstitucion(guardada);
+        if (institucion.getReglasEnrutamiento() == null) {
+            institucion.setReglasEnrutamiento(new ArrayList<>());
+        }
 
-        interruptor.setFallosConsecutivos(0);
-        interruptor.setEstaAbierto(false);
-        interruptor.setUltimoFallo(null);
-
-        interruptorRepository.save(interruptor);
-        return guardada;
+        return institucionRepository.save(institucion);
     }
 
     public List<Institucion> listarTodas() {
@@ -56,71 +48,66 @@ public class DirectorioService {
     }
 
     public Optional<Institucion> buscarPorBic(String bic) {
-        try {
-            if (!validarDisponibilidad(bic)) {
-                System.out.println(">>> ⛔ CIRCUIT BREAKER ACTIVADO PARA: " + bic);
-                return Optional.empty();
-            }
-            return institucionRepository.findById(bic);
-        } catch (Exception e) {
-            e.printStackTrace(); // Para ver el error real en logs si vuelve a pasar
-            return Optional.empty(); // Fallo seguro: si explota, decimos que no existe
-        }
+        // Si el BIC es nulo, evitamos la consulta y retornamos vacío
+        if (bic == null) return Optional.empty();
+        
+        return institucionRepository.findById(bic)
+                .filter(this::validarDisponibilidad);
     }
 
-    
-
-    @Transactional
-    public ReglaEnrutamiento registrarRegla(ReglaEnrutamiento regla) {
-        String bic = regla.getInstitucion().getCodigoBic();
-        Institucion banco = institucionRepository.findById(bic)
+    public Institucion aniadirRegla(@NonNull String bic, @NonNull ReglaEnrutamiento nuevaRegla) {
+        Institucion inst = institucionRepository.findById(bic)
                 .orElseThrow(() -> new RuntimeException("Banco no encontrado: " + bic));
-
-        regla.setInstitucion(banco);
-        return reglaRepository.save(regla);
+        
+        if (inst.getReglasEnrutamiento() == null) {
+            inst.setReglasEnrutamiento(new ArrayList<>());
+        }
+        
+        inst.getReglasEnrutamiento().add(nuevaRegla);
+        return institucionRepository.save(inst);
     }
-
-    
 
     public Optional<Institucion> descubrirBancoPorBin(String bin) {
-        Optional<ReglaEnrutamiento> regla = reglaRepository.findByPrefijoBin(bin);
-
-        if (regla.isPresent()) {
-            Institucion banco = regla.get().getInstitucion();
-
-            // VALIDACIÓN DE SEGURIDAD: ¿El banco está bloqueado por el Circuit Breaker?
-            if (!validarDisponibilidad(banco.getCodigoBic())) {
-                // Lanzar excepción. Por ahora, devolvemos empty para proteger el sistema.
-                System.out.println("ADVERTENCIA: Intento de ruta hacia " + banco.getCodigoBic() + " bloqueado por Circuit Breaker.");
-                return Optional.empty();
-            }
-            return Optional.of(banco);
-        }
-        return Optional.empty();
+        if (bin == null) return Optional.empty();
+        
+        return institucionRepository.findByReglasEnrutamientoPrefijoBin(bin)
+                .filter(this::validarDisponibilidad);
     }
 
-    // --- MÉTODOS PRIVADOS DEL CIRCUIT BREAKER ---
+    public void registrarFallo(String bic) {
+        if (bic == null) return;
+        
+        institucionRepository.findById(bic).ifPresent(inst -> {
+            InterruptorCircuito interruptor = inst.getInterruptorCircuito();
+            if (interruptor == null) {
+                interruptor = new InterruptorCircuito(false, 0, null);
+                inst.setInterruptorCircuito(interruptor);
+            }
+            
+            interruptor.setFallosConsecutivos(interruptor.getFallosConsecutivos() + 1);
+            interruptor.setUltimoFallo(LocalDateTime.now());
 
-    private boolean validarDisponibilidad(String bic) {
-        // Usamos findById para evitar NullPointerException si no existe
-        return interruptorRepository.findById(bic)
-            .map(interruptor -> {
-                // Si NO está abierto (false), entonces está disponible (true)
-                if (!Boolean.TRUE.equals(interruptor.getEstaAbierto())) {
-                    return true;
-                }
+            if (interruptor.getFallosConsecutivos() >= 5) {
+                interruptor.setEstaAbierto(true);
+            }
+            
+            institucionRepository.save(inst);
+        });
+    }
 
-                // Si está abierto (true), verificamos el tiempo de castigo
-                if (interruptor.getUltimoFallo() != null) {
-                    long segundos = ChronoUnit.SECONDS.between(interruptor.getUltimoFallo(), LocalDateTime.now());
-                    // Si pasaron más de 60 segundos, permitimos probar (Half-Open)
-                    if (segundos > 60) {
-                        return true; 
-                    }
-                }
-                // Si llegamos aquí, sigue bloqueado
-                return false;
-            })
-            .orElse(true); // Si no hay registro del interruptor, asumimos que está disponible (true)
+    private boolean validarDisponibilidad(@NonNull Institucion inst) {
+        InterruptorCircuito interruptor = inst.getInterruptorCircuito();
+        
+        if (interruptor == null || !interruptor.isEstaAbierto()) {
+            return true;
+        }
+
+        if (interruptor.getUltimoFallo() != null) {
+            long segundos = ChronoUnit.SECONDS.between(interruptor.getUltimoFallo(), LocalDateTime.now());
+            // Se mantiene el tiempo de castigo definido en el documento (60s)
+            return segundos > 60;
+        }
+
+        return false;
     }
 }
