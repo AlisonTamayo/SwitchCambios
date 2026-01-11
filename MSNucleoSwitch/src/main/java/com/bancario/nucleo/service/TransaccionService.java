@@ -1,5 +1,19 @@
 package com.bancario.nucleo.service;
 
+import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.time.LocalDateTime;
+import java.util.UUID;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.RestTemplate;
+
 import com.bancario.nucleo.dto.TransaccionResponseDTO;
 import com.bancario.nucleo.dto.external.InstitucionDTO;
 import com.bancario.nucleo.dto.external.RegistroMovimientoRequest;
@@ -9,28 +23,21 @@ import com.bancario.nucleo.model.RespaldoIdempotencia;
 import com.bancario.nucleo.model.Transaccion;
 import com.bancario.nucleo.repository.RespaldoIdempotenciaRepository;
 import com.bancario.nucleo.repository.TransaccionRepository;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.client.HttpClientErrorException;
-import org.springframework.web.client.RestTemplate;
-
-import java.math.BigDecimal;
-import java.time.LocalDateTime;
-import java.util.UUID;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class TransaccionService {
 
+    @Autowired
+    private StringRedisTemplate redisTemplate;
     private final TransaccionRepository transaccionRepository;
     private final RespaldoIdempotenciaRepository idempotenciaRepository;
     private final RestTemplate restTemplate;
 
-    // --- URLs DE LOS MICROSERVICIOS ---
     @Value("${service.directorio.url:http://ms-directorio:8081}")
     private String directorioUrl;
 
@@ -40,32 +47,56 @@ public class TransaccionService {
     @Value("${service.compensacion.url:http://ms-compensacion:8084}")
     private String compensacionUrl;
 
-    // Para este prototipo, asumimos que siempre estamos en el Ciclo 1 (Ciclo Diario Abierto)
     private static final Integer CICLO_ACTUAL_ID = 1;
 
-    /**
-     * Procesa una transacción bajo el estándar ISO 20022.
-     * Flujo: Validación -> Contabilidad (Ledger) -> Compensación (Clearing) -> Notificación (Webhook).
-     */
     @Transactional
     public TransaccionResponseDTO procesarTransaccionIso(MensajeISO iso) {
-        // 1. EXTRACCIÓN DE DATOS ISO
         UUID idInstruccion = UUID.fromString(iso.getBody().getInstructionId());
         String bicOrigen = iso.getHeader().getOriginatingBankId();
         String bicDestino = iso.getBody().getCreditor().getTargetBankId();
         BigDecimal monto = iso.getBody().getAmount().getValue();
         String moneda = iso.getBody().getAmount().getCurrency();
         String messageId = iso.getHeader().getMessageId();
+        String creationDateTime = iso.getHeader().getCreationDateTime();
+        String cuentaOrigen = iso.getBody().getDebtor().getAccountId();
+        String cuentaDestino = iso.getBody().getCreditor().getAccountId();
+
+        String fingerprint = idInstruccion.toString() + monto.toString() + moneda + bicOrigen + bicDestino + creationDateTime + cuentaOrigen + cuentaDestino;
+        String fingerprintMd5 = generarMD5(fingerprint);
 
         log.info(">>> Iniciando Tx ISO: InstID={} MsgID={} Monto={}", idInstruccion, messageId, monto);
 
-        // 2. IDEMPOTENCIA
-        if (transaccionRepository.existsById(idInstruccion)) {
-            log.warn("Transacción duplicada detectada: {}", idInstruccion);
-            return obtenerTransaccion(idInstruccion);
+        String redisKey = "idem:" + idInstruccion;
+        String redisValue = fingerprintMd5 + "|PROCESSING|-";
+
+        Boolean claimed = redisTemplate.opsForValue().setIfAbsent(redisKey, redisValue, java.time.Duration.ofHours(24));
+
+        if (Boolean.TRUE.equals(claimed)) {
+            log.info("Redis CLAIM OK — Nueva transacción {}", idInstruccion);
+        }
+        else {
+        String existing = redisTemplate.opsForValue().get(redisKey);
+
+        if (existing == null) {
+            throw new IllegalStateException("Redis inconsistente");
         }
 
-        // 3. PERSISTENCIA INICIAL (Estado RECEIVED)
+        String[] parts = existing.split("\\|");
+        String storedMd5 = parts[0];
+        String storedStatus = parts[1];
+
+        if (!storedMd5.equals(fingerprintMd5)) {
+            log.error("VIOLACIÓN DE INTEGRIDAD ISO 20022 — InstructionId={} alterado", idInstruccion);
+            throw new SecurityException(
+                    "Same InstructionId, different content fingerprint"
+            );
+        }
+
+        log.warn("Duplicado legítimo ISO 20022 — Replay {}", idInstruccion);
+
+        return obtenerTransaccion(idInstruccion);
+    }
+
         Transaccion tx = new Transaccion();
         tx.setIdInstruccion(idInstruccion);
         tx.setIdMensaje(messageId);
@@ -80,45 +111,34 @@ public class TransaccionService {
         tx = transaccionRepository.save(tx);
 
         try {
-            // 4. VALIDACIÓN CON DIRECTORIO
-            validarBanco(bicOrigen); // Validar emisor
-            InstitucionDTO bancoDestinoInfo = validarBanco(bicDestino); // Validar receptor y obtener URL
+            validarBanco(bicOrigen); 
+            InstitucionDTO bancoDestinoInfo = validarBanco(bicDestino); 
 
-            // 5. LEDGER: MOVIMIENTO DE DINERO REAL (Cuentas Técnicas)
-            // 5.1 Debitar al Origen
             log.info("Ledger: Debitando {} a {}", monto, bicOrigen);
             registrarMovimientoContable(bicOrigen, idInstruccion, monto, "DEBIT");
 
-            // 5.2 Acreditar al Destino
             log.info("Ledger: Acreditando {} a {}", monto, bicDestino);
             registrarMovimientoContable(bicDestino, idInstruccion, monto, "CREDIT");
 
-            // 6. COMPENSACIÓN: ACUMULACIÓN DE SALDOS (Clearing)
-            // Esto actualiza la tabla de posiciones netas para el cierre del día
             log.info("Clearing: Registrando posiciones en Ciclo {}", CICLO_ACTUAL_ID);
-            notificarCompensacion(bicOrigen, monto, true);  // Origen DEBE (Débito)
-            notificarCompensacion(bicDestino, monto, false); // Destino TIENE A FAVOR (Crédito)
+            notificarCompensacion(bicOrigen, monto, true);  
+            notificarCompensacion(bicDestino, monto, false); 
 
-            // 7. NOTIFICACIÓN AL BANCO DESTINO (PUSH / Webhook)
             String urlWebhook = bancoDestinoInfo.getUrlDestino();
             log.info("Webhook: Notificando a {}", urlWebhook);
             try {
                 restTemplate.postForEntity(urlWebhook, iso, String.class);
                 log.info("Webhook: Entregado exitosamente.");
             } catch (Exception e) {
-                // Si falla el webhook, no revertimos el dinero (ya está en Ledger), pero alertamos.
                 log.error("Webhook: Falló la entrega. El banco destino deberá conciliar manualmente. Error: {}", e.getMessage());
             }
 
-            // 8. FINALIZACIÓN EXITOSA
             tx.setEstado("COMPLETED");
             guardarRespaldoIdempotencia(tx, "EXITO");
 
         } catch (Exception e) {
             log.error("Error crítico en Tx: {}", e.getMessage());
             tx.setEstado("FAILED");
-            // Aquí, si falló en el paso 5.2, el sistema debería tener una reversa automática.
-            // Para el alcance actual, el estado FAILED indica intervención manual requerida si hubo débito parcial.
         }
 
         Transaccion saved = transaccionRepository.save(tx);
@@ -131,7 +151,6 @@ public class TransaccionService {
         return mapToDTO(tx);
     }
 
-    // --- MÉTODOS PRIVADOS DE INTEGRACIÓN ---
 
     private InstitucionDTO validarBanco(String bic) {
         try {
@@ -163,34 +182,27 @@ public class TransaccionService {
         }
     }
 
-    /**
-     * Llama al microservicio de Compensación para acumular los montos en el ciclo diario.
-     */
+
     private void notificarCompensacion(String bic, BigDecimal monto, boolean esDebito) {
         try {
-            // URL: POST /api/v1/compensacion/ciclos/{id}/acumular?bic=...&monto=...&esDebito=...
             String url = String.format("%s/api/v1/compensacion/ciclos/%d/acumular?bic=%s&monto=%s&esDebito=%s",
                     compensacionUrl, CICLO_ACTUAL_ID, bic, monto.toString(), esDebito);
             
             restTemplate.postForEntity(url, null, Void.class);
             
         } catch (Exception e) {
-            // Un fallo en compensación es grave administrativamente, pero no debe detener la transacción en tiempo real.
             log.error("ALERTA: Fallo al registrar compensación para {}. Descuadre en Clearing.", bic, e);
         }
     }
 
     private void guardarRespaldoIdempotencia(Transaccion tx, String resultado) {
         RespaldoIdempotencia respaldo = new RespaldoIdempotencia();
-        // Usamos constructor vacío para que @MapsId funcione correctamente
         respaldo.setHashContenido("HASH_" + tx.getIdInstruccion()); 
         respaldo.setCuerpoRespuesta("{ \"estado\": \"" + resultado + "\" }");
         respaldo.setFechaExpiracion(LocalDateTime.now().plusDays(1));
         respaldo.setTransaccion(tx);
         idempotenciaRepository.save(respaldo);
     }
-
-    // --- MAPPERS ---
 
     private TransaccionResponseDTO mapToDTO(Transaccion tx) {
         return TransaccionResponseDTO.builder()
@@ -204,5 +216,21 @@ public class TransaccionService {
                 .estado(tx.getEstado())
                 .fechaCreacion(tx.getFechaCreacion())
                 .build();
+    }
+
+    private String generarMD5(String input) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("MD5");
+            byte[] digest = md.digest(input.getBytes(StandardCharsets.UTF_8));
+
+            StringBuilder hex = new StringBuilder();
+            for (byte b : digest) {
+                hex.append(String.format("%02x", b));
+            }
+            return hex.toString();
+
+        } catch (Exception e) {
+            throw new RuntimeException("Error generando MD5", e);
+        }
     }
 }

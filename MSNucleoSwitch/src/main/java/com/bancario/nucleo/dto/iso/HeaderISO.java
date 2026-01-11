@@ -6,8 +6,8 @@ import jakarta.validation.constraints.NotBlank;
 @Data
 public class HeaderISO {
     @NotBlank
-    private String messageId;        // Trazabilidad técnica
-    private String creationDateTime; // Fecha ISO
+    private String messageId;        
+    private String creationDateTime; 
     @NotBlank
-    private String originatingBankId; // BIC del banco que envía
+    private String originatingBankId; 
 }
