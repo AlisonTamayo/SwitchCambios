@@ -20,6 +20,7 @@ public class Movimiento {
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "idCuenta", nullable = false)
+    @com.fasterxml.jackson.annotation.JsonIgnore
     private CuentaTecnica cuenta;
 
     @Column(name = "idInstruccion", nullable = false)
