@@ -43,4 +43,25 @@ public class LedgerController {
     static class ApiError {
         private String error;
     }
+
+    @PostMapping("/v2/switch/transfers/return")
+    public ResponseEntity<?> revertirTransaccion(@RequestBody com.switchbank.mscontabilidad.dto.ReturnRequestDTO req) {
+        try {
+            return ResponseEntity.ok(service.revertirTransaccion(req));
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(new ApiError(e.getMessage()));
+        }
+    }
+
+    @GetMapping("/range")
+    public ResponseEntity<?> obtenerMovimientosPorRango(
+            @RequestParam @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE_TIME) java.time.LocalDateTime start,
+            @RequestParam @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE_TIME) java.time.LocalDateTime end) {
+        return ResponseEntity.ok(service.obtenerMovimientosPorRango(start, end));
+    }
+
+    @lombok.Data
+    static class ReversoRequest {
+        private java.util.UUID idInstruccion;
+    }
 }

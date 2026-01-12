@@ -6,6 +6,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.switchbank.mscontabilidad.dto.CrearCuentaRequest;
 import com.switchbank.mscontabilidad.dto.CuentaDTO;
 import com.switchbank.mscontabilidad.dto.RegistroMovimientoRequest;
+import com.switchbank.mscontabilidad.dto.ReturnRequestDTO;
 import com.switchbank.mscontabilidad.modelo.CuentaTecnica;
 import com.switchbank.mscontabilidad.modelo.Movimiento;
 import com.switchbank.mscontabilidad.modelo.TipoMovimiento;
@@ -124,6 +125,86 @@ public class LedgerService {
 
         cuenta.setFirmaIntegridad(calcularHash(cuenta));
         return mapToDTO(cuentaRepo.save(cuenta));
+    }
+
+    @Transactional
+    public CuentaDTO revertirTransaccion(ReturnRequestDTO req) {
+        String originalIdStr = req.getBody().getOriginalInstructionId();
+        if (originalIdStr == null) {
+            throw new RuntimeException("originalInstructionId es obligatorio");
+        }
+        UUID originalInstructionId = UUID.fromString(originalIdStr);
+
+        Movimiento original = movimientoRepo.findByIdInstruccion(originalInstructionId)
+                .orElseThrow(
+                        () -> new RuntimeException("Transacción original no encontrada: " + originalInstructionId));
+
+        // 1. Validar Tiempo (24h temporalmente)
+        if (original.getFechaRegistro().isBefore(LocalDateTime.now().minusHours(24))) {
+            throw new RuntimeException("La transacción original es mayor a 24 horas, no se puede revertir.");
+        }
+
+        // 2. Prevención Doble Reverso
+        if (movimientoRepo.existsByTipoAndReferenciaId(TipoMovimiento.REVERSAL, originalInstructionId)) {
+            throw new RuntimeException("DUPLICADO: Esta transacción ya ha sido revertida anteriormente.");
+        }
+
+        // 3. Validar Monto
+        BigDecimal montoSolicitado = req.getBody().getReturnAmount().getValue();
+        if (montoSolicitado.compareTo(original.getMonto()) != 0) {
+            throw new RuntimeException("El monto a revertir (" + montoSolicitado + ") no coincide con el original ("
+                    + original.getMonto() + ")");
+        }
+
+        CuentaTecnica cuenta = original.getCuenta();
+
+        // 4. Validar Integridad Cuenta
+        String hashActual = calcularHash(cuenta);
+        if (!hashActual.equals(cuenta.getFirmaIntegridad())) {
+            throw new RuntimeException(
+                    "ALERTA DE SEGURIDAD: La cuenta " + cuenta.getCodigoBic() + " ha sido alterada.");
+        }
+
+        TipoMovimiento tipoOriginal = original.getTipo();
+        if (tipoOriginal == TipoMovimiento.REVERSAL) {
+            throw new RuntimeException("No se puede revertir una reversión.");
+        }
+
+        // 5. Ejecutar Reverso Contable
+        if (tipoOriginal == TipoMovimiento.DEBIT) {
+            // Si fue débito, devolvemos el dinero (sumar)
+            cuenta.setSaldoDisponible(cuenta.getSaldoDisponible().add(montoSolicitado));
+        } else {
+            // Si fue crédito, retiramos el dinero (restar)
+            if (cuenta.getSaldoDisponible().compareTo(montoSolicitado) < 0) {
+                throw new RuntimeException("Fondos insuficientes para revertir el crédito.");
+            }
+            cuenta.setSaldoDisponible(cuenta.getSaldoDisponible().subtract(montoSolicitado));
+        }
+
+        // 6. Registrar Movimiento de Reverso
+        Movimiento reverso = new Movimiento();
+        reverso.setCuenta(cuenta);
+
+        // Usamos el ID que manda el BANCO (returnInstructionId)
+        String returnIdStr = req.getBody().getReturnInstructionId();
+        reverso.setIdInstruccion(returnIdStr != null ? UUID.fromString(returnIdStr) : UUID.randomUUID());
+
+        reverso.setReferenciaId(originalInstructionId); // Link al original
+        reverso.setTipo(TipoMovimiento.REVERSAL);
+        reverso.setMonto(montoSolicitado);
+        reverso.setSaldoResultante(cuenta.getSaldoDisponible());
+        reverso.setFechaRegistro(LocalDateTime.now());
+
+        movimientoRepo.save(reverso);
+
+        cuenta.setFirmaIntegridad(calcularHash(cuenta));
+        return mapToDTO(cuentaRepo.save(cuenta));
+    }
+
+    @Transactional(readOnly = true)
+    public java.util.List<Movimiento> obtenerMovimientosPorRango(LocalDateTime start, LocalDateTime end) {
+        return movimientoRepo.findByFechaRegistroBetween(start, end);
     }
 
     private String calcularHash(CuentaTecnica c) {

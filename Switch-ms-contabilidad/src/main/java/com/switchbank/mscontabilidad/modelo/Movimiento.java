@@ -38,5 +38,9 @@ public class Movimiento {
     @Column(name = "fechaRegistro", nullable = false)
     private LocalDateTime fechaRegistro;
 
-    public Movimiento() {}
+    @Column(name = "referenciaId")
+    private UUID referenciaId; // ID de la transacción original (para Reversos)
+
+    public Movimiento() {
+    }
 }

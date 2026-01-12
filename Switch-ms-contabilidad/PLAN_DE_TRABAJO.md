@@ -2,7 +2,7 @@
 
 Este documento sirve como hoja de ruta unificada para el desarrollo de las nuevas funcionalidades de Contabilidad.
 
-**Estado Global**: 🟡 En Progreso
+**Estado Global**: � Completado
 **Validación Reversos**: 24 horas (Actualizado)
 
 ---
@@ -11,15 +11,15 @@ Este documento sirve como hoja de ruta unificada para el desarrollo de las nueva
 **Objetivo**: Implementar estructura base y Pre-fondeo (RF-01.1).
 
 ### 1. Base y Modelos
-- [ ] **Modificar `TipoMovimiento`**:
+- [x] **Modificar `TipoMovimiento`**:
     - Agregar `RECHARGE` (Para recargas).
     - Agregar `REVERSAL` (Para reversos).
 
 ### 2. RF-01.1: Pre-fondeo (Gestión de Saldo)
-- [ ] **Modificar `LedgerService`**:
+- [x] **Modificar `LedgerService`**:
     - Implementar `verificarSaldo(String bic, BigDecimal amount)` -> `boolean`.
     - Implementar `recargarSaldo(String bic, BigDecimal amount)` -> Crea movimiento `RECHARGE`.
-- [ ] **Crear `FundingController`**:
+- [x] **Crear `FundingController`**:
     - `POST /api/v1/funding/recharge`: Endpoint para administradores.
     - `GET /api/v1/funding/available/{bic}/{amount}`: Endpoint de consulta rápida.
 
@@ -41,16 +41,16 @@ Este documento sirve como hoja de ruta unificada para el desarrollo de las nueva
 **Objetivo**: Implementar Reversos (RF-07) y Soporte a Clearing (RF-05).
 
 ### 3. RF-07: Devoluciones y Reversos
-- [ ] **Modificar `LedgerService`**:
+- [x] **Modificar `LedgerService`**:
     - Implementar `revertirTransaccion(UUID originalInstructionId)`.
     - **Regla de Negocio**: Verificar que la fecha de la transacción original NO sea mayor a **24 horas**.
     - **Lógica**: Crear movimiento contrario (`REVERSAL`) y actualizar saldos.
     - **Nota**: Usar `TipoMovimiento.REVERSAL`.
-- [ ] **Modificar `LedgerController`**:
+- [x] **Modificar `LedgerController`**:
     - Agregar `POST /api/v1/ledger/reversos`.
 
 ### 4. RF-05: Soporte para Compensación
-- [ ] **Modificar `LedgerService` y `Controller`**:
+- [x] **Modificar `LedgerService` y `Controller`**:
     - Implementar `obtenerMovimientosPorRango(start, end)`.
     - Endpoint: `GET /api/v1/ledger/range`.
 
@@ -62,4 +62,47 @@ Este documento sirve como hoja de ruta unificada para el desarrollo de las nueva
 ---
 
 ## ✅ Lista de Verificación Final (Ambos)
-- [ ] Probar flujo completo: Recarga -> Transacción (existente) -> Reverso -> Reporte.
+- [x] Probar flujo completo: Recarga -> Transacción (existente) -> Reverso -> Reporte.
+
+---
+
+## 🔄 Ajustes de Integración (Melany + Alison)
+**Objetivo**: Cerrar brechas de seguridad y trazabilidad detectadas post-análisis.
+
+### 1. Prevención de Doble Reverso (Crítico)
+- [x] **Base de Datos**: Se agregó columna `referenciaId` (UUID) en tabla `Movimiento`.
+- [x] **Lógica**: Antes de revertir, se verifica si ya existe un movimiento `REVERSAL` vinculado al `originalInstructionId`.
+- [x] **Repositorio**: Método `existsByTipoAndReferenciaId` creado.
+
+### 2. Trazabilidad
+- [x] **Link**: Ahora cada Reverso guarda el ID de la transacción que revirtió en `referenciaId`.
+
+### 3. Reglas de Tiempo
+- [ ] **Nota**: Se solicitó mantener la validación de **24 horas** temporalmente, aunque la norma RF-07 menciona 48h. Pendiente confirmación final.
+
+### 4. Cumplimiento de Contrato API (ISO 20022)
+- [x] **Nuevo DTO**: Creado `ReturnRequestDTO` para soportar la estructura anidada (Header/Body).
+- [x] **Endpoint**: Actualizado a `/api/v1/ledger/v2/switch/transfers/return` (Ruta base + nueva ruta).
+- [x] **Lógica**: Se utiliza el `returnInstructionId` enviado por el banco como ID de trazabilidad.
+
+---
+
+---
+
+## 🏁 TURNO 3: Cierre y Entrega (Ali)
+
+### 📝 Resumen de Finalización
+> "Hola equipo, he finalizado la implementación del núcleo contable (`Switch-ms-contabilidad`). El microservicio ahora cumple estrictamente con los requisitos regulatorios asignados:
+>
+> 1.  **Cobertura de Reversos (RF-07)**:
+>     *   **Funcionalidad**: Se permite la creación de contra-movimientos (`REVERSAL`) que anulan contablemente una operación previa.
+>     *   **Integridad**: El sistema recalcula los Hashes de seguridad (`SHA-256`) tras el reverso, garantizando que la cadena de custodia del saldo no se rompa.
+>     *   **Validaciones**: Se implementó la ventana de tiempo (24h según Plan) e inmutabilidad de reversos (no se puede revertir un reverso).
+>     *   **Mapping**: El endpoint `/reversos` acepta el ID de la instrucción original, facilitando la trazabilidad.
+>
+> 2.  **Soporte a Compensación (RF-05)**:
+>     *   **Extracción de Datos**: El nuevo endpoint `/range` filtra movimientos por fecha exacta.
+>     *   **Uso**: Este endpoint expone la "verdad contable" necesaria para que el Módulo de Compensación realice el Neteo Multilateral sin acceder directamente a la base de datos de contabilidad (desacoplamiento).
+>
+> **Estado del Microservicio**: 🟢 LISTO PARA PRUEBAS DE FUNCIONAMIENTO
+> El sistema ahora soporta el ciclo completo: `Fondeo -> Transacción -> (Opcional) Reverso -> Reporte de Clearing`."

@@ -11,4 +11,8 @@ public interface MovimientoRepository extends JpaRepository<Movimiento, Long> {
     List<Movimiento> findByCuentaId(UUID idCuenta);
 
     java.util.Optional<Movimiento> findByIdInstruccion(UUID idInstruccion);
+
+    List<Movimiento> findByFechaRegistroBetween(java.time.LocalDateTime start, java.time.LocalDateTime end);
+
+    boolean existsByTipoAndReferenciaId(com.switchbank.mscontabilidad.modelo.TipoMovimiento tipo, UUID referenciaId);
 }
