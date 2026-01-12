@@ -20,14 +20,14 @@ public class RespaldoIdempotencia {
     @Column(name = "hashContenido", nullable = false)
     private String hashContenido;
 
-    @Column(name = "cuerpoRespuesta", columnDefinition = "text") // Cambiado a text para evitar problemas con jsonb si no hay dialecto
+    @Column(name = "cuerpoRespuesta", columnDefinition = "text")
     private String cuerpoRespuesta;
 
     @Column(name = "fechaExpiracion", nullable = false)
     private LocalDateTime fechaExpiracion;
 
     @OneToOne
-    @MapsId // <--- ESTO ES LO IMPORTANTE: Copia el ID de la transacción
+    @MapsId 
     @JoinColumn(name = "idInstruccion")
     private Transaccion transaccion;
 

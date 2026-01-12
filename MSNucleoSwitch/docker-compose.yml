@@ -8,6 +8,12 @@ services:
     ports:
       - "5434:5432"
 
+  
+  nucleo-redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
   nucleo-app:
     build: .
     ports:
@@ -18,5 +24,11 @@ services:
       SPRING_DATASOURCE_USERNAME: postgres
       SPRING_DATASOURCE_PASSWORD: 123
       SPRING_JPA_HIBERNATE_DDL_AUTO: update
+
+      
+      SPRING_DATA_REDIS_HOST: nucleo-redis
+      SPRING_DATA_REDIS_PORT: 6379
+
     depends_on:
       - nucleo-db
+      - nucleo-redis

@@ -5,6 +5,10 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.util.UUID;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
+
+
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -36,6 +40,9 @@ public class TransaccionService {
     private final TransaccionRepository transaccionRepository;
     private final RespaldoIdempotenciaRepository idempotenciaRepository;
     private final RestTemplate restTemplate;
+    @PersistenceContext
+    private EntityManager entityManager;
+
 
     @Value("${service.directorio.url:http://ms-directorio:8081}")
     private String directorioUrl;
@@ -84,11 +91,10 @@ public class TransaccionService {
 
         String fingerprintMd5 = generarMD5(fingerprint);
 
+        
         log.info(">>> Iniciando Tx ISO: InstID={} MsgID={} Monto={}", idInstruccion, messageId, monto);
 
         String redisKey = "idem:" + idInstruccion;
-
-        
         String redisValue = fingerprintMd5 + "|" + ISO_PDNG + "|INIT";
 
         
@@ -294,22 +300,46 @@ public class TransaccionService {
     }
 
     private void guardarRespaldoIdempotencia(Transaccion tx, String fingerprintMd5, String isoStatus, String reasonCode) {
-        RespaldoIdempotencia respaldo = new RespaldoIdempotencia();
-        respaldo.setIdInstruccion(tx.getIdInstruccion()); 
-        respaldo.setHashContenido(fingerprintMd5);
-        respaldo.setFechaExpiracion(LocalDateTime.now().plusDays(1));
-        respaldo.setTransaccion(tx);
 
-        respaldo.setCuerpoRespuesta(
+    UUID id = tx.getIdInstruccion();
+
+    RespaldoIdempotencia respaldoExistente = idempotenciaRepository.findById(id).orElse(null);
+
+    if (respaldoExistente == null) {
+        RespaldoIdempotencia nuevo = new RespaldoIdempotencia();
+
+        nuevo.setTransaccion(tx); 
+        nuevo.setHashContenido(fingerprintMd5);
+        nuevo.setFechaExpiracion(LocalDateTime.now().plusDays(1));
+
+        nuevo.setCuerpoRespuesta(
                 "{ \"pacs002\": { " +
-                        "\"instructionId\": \"" + tx.getIdInstruccion() + "\", " +
+                        "\"instructionId\": \"" + id + "\", " +
                         "\"transactionStatus\": \"" + isoStatus + "\", " +
                         "\"reason\": \"" + reasonCode + "\" " +
                 "} }"
         );
 
-        idempotenciaRepository.save(respaldo);
+        
+        entityManager.persist(nuevo);
+        entityManager.flush();
+        return;
     }
+
+    
+    respaldoExistente.setHashContenido(fingerprintMd5);
+    respaldoExistente.setFechaExpiracion(LocalDateTime.now().plusDays(1));
+    respaldoExistente.setCuerpoRespuesta(
+            "{ \"pacs002\": { " +
+                    "\"instructionId\": \"" + id + "\", " +
+                    "\"transactionStatus\": \"" + isoStatus + "\", " +
+                    "\"reason\": \"" + reasonCode + "\" " +
+            "} }"
+    );
+
+    idempotenciaRepository.save(respaldoExistente);
+}
+
 
     private TransaccionResponseDTO mapToDTO(Transaccion tx) {
         return TransaccionResponseDTO.builder()
