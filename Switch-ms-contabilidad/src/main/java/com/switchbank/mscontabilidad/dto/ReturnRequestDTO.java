@@ -25,10 +25,10 @@ public class ReturnRequestDTO {
     @NoArgsConstructor
     @AllArgsConstructor
     public static class Body {
-        private String returnInstructionId; // ID del reverso provisto por el banco (pacs.004)
-        private String originalInstructionId; // ID de la transacción original a revertir
-        private String returnReason; // Motivo (ej. MS03)
-        private Amount returnAmount; // Monto a devolver
+        private String returnInstructionId;
+        private String originalInstructionId;
+        private String returnReason;
+        private Amount returnAmount;
     }
 
     @Data

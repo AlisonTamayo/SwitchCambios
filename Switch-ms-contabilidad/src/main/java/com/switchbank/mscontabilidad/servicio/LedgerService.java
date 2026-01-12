@@ -38,7 +38,7 @@ public class LedgerService {
         }
 
         CuentaTecnica cuenta = new CuentaTecnica(req.getCodigoBic());
-        cuenta.setFirmaIntegridad(calcularHash(cuenta)); // Hash inicial
+        cuenta.setFirmaIntegridad(calcularHash(cuenta));
 
         CuentaTecnica saved = cuentaRepo.save(cuenta);
         return mapToDTO(saved);
@@ -139,17 +139,13 @@ public class LedgerService {
                 .orElseThrow(
                         () -> new RuntimeException("Transacción original no encontrada: " + originalInstructionId));
 
-        // 1. Validar Tiempo (24h temporalmente)
         if (original.getFechaRegistro().isBefore(LocalDateTime.now().minusHours(24))) {
             throw new RuntimeException("La transacción original es mayor a 24 horas, no se puede revertir.");
         }
-
-        // 2. Prevención Doble Reverso
         if (movimientoRepo.existsByTipoAndReferenciaId(TipoMovimiento.REVERSAL, originalInstructionId)) {
             throw new RuntimeException("DUPLICADO: Esta transacción ya ha sido revertida anteriormente.");
         }
 
-        // 3. Validar Monto
         BigDecimal montoSolicitado = req.getBody().getReturnAmount().getValue();
         if (montoSolicitado.compareTo(original.getMonto()) != 0) {
             throw new RuntimeException("El monto a revertir (" + montoSolicitado + ") no coincide con el original ("
@@ -158,7 +154,6 @@ public class LedgerService {
 
         CuentaTecnica cuenta = original.getCuenta();
 
-        // 4. Validar Integridad Cuenta
         String hashActual = calcularHash(cuenta);
         if (!hashActual.equals(cuenta.getFirmaIntegridad())) {
             throw new RuntimeException(
@@ -170,27 +165,22 @@ public class LedgerService {
             throw new RuntimeException("No se puede revertir una reversión.");
         }
 
-        // 5. Ejecutar Reverso Contable
         if (tipoOriginal == TipoMovimiento.DEBIT) {
-            // Si fue débito, devolvemos el dinero (sumar)
             cuenta.setSaldoDisponible(cuenta.getSaldoDisponible().add(montoSolicitado));
         } else {
-            // Si fue crédito, retiramos el dinero (restar)
             if (cuenta.getSaldoDisponible().compareTo(montoSolicitado) < 0) {
                 throw new RuntimeException("Fondos insuficientes para revertir el crédito.");
             }
             cuenta.setSaldoDisponible(cuenta.getSaldoDisponible().subtract(montoSolicitado));
         }
 
-        // 6. Registrar Movimiento de Reverso
         Movimiento reverso = new Movimiento();
         reverso.setCuenta(cuenta);
 
-        // Usamos el ID que manda el BANCO (returnInstructionId)
         String returnIdStr = req.getBody().getReturnInstructionId();
         reverso.setIdInstruccion(returnIdStr != null ? UUID.fromString(returnIdStr) : UUID.randomUUID());
 
-        reverso.setReferenciaId(originalInstructionId); // Link al original
+        reverso.setReferenciaId(originalInstructionId);
         reverso.setTipo(TipoMovimiento.REVERSAL);
         reverso.setMonto(montoSolicitado);
         reverso.setSaldoResultante(cuenta.getSaldoDisponible());

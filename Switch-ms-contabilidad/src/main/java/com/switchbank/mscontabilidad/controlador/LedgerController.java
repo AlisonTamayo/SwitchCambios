@@ -29,7 +29,7 @@ public class LedgerController {
     }
 
     @PostMapping("/movimientos")
-    public ResponseEntity<?> registrarMovimiento(@RequestBody RegistroMovimientoRequest req) { // Nota el <?>
+    public ResponseEntity<?> registrarMovimiento(@RequestBody RegistroMovimientoRequest req) {
         try {
             return ResponseEntity.ok(service.registrarMovimiento(req));
         } catch (RuntimeException e) {

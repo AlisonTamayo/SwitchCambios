@@ -40,7 +40,7 @@ public class Movimiento {
     private LocalDateTime fechaRegistro;
 
     @Column(name = "referenciaId")
-    private UUID referenciaId; // ID de la transacción original (para Reversos)
+    private UUID referenciaId;
 
     public Movimiento() {
     }
