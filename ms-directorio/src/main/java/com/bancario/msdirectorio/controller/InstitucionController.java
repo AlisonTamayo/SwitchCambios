@@ -6,10 +6,12 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.bancario.msdirectorio.model.Institucion;
@@ -25,7 +27,6 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 @Tag(name = "Directorio Bancario", description = "Gestión de participantes bajo modelo MongoDB e ISO 20022")
 public class InstitucionController {
 
-    
     private final DirectorioService directorioService;
 
     public InstitucionController(DirectorioService directorioService) {
@@ -61,7 +62,7 @@ public class InstitucionController {
     @PostMapping("/instituciones/{bic}/reglas")
     public ResponseEntity<Institucion> agregarRegla(@PathVariable String bic, @RequestBody ReglaEnrutamiento regla) {
         try {
-            
+
             Institucion actualizada = directorioService.aniadirRegla(bic, regla);
             return ResponseEntity.ok(actualizada);
         } catch (RuntimeException e) {
@@ -87,5 +88,22 @@ public class InstitucionController {
     public ResponseEntity<Void> reportarFallo(@PathVariable String bic) {
         directorioService.registrarFallo(bic);
         return ResponseEntity.ok().build();
+    }
+
+
+    @Operation(summary = "RF-02: Actualización técnica restringida (Estado y API Key)")
+    @PatchMapping("/instituciones/{bic}/operaciones")
+    public ResponseEntity<Institucion> actualizarOperaciones(
+            @PathVariable String bic,
+            @RequestParam(required = false) String nuevoEstado,
+            @RequestParam(required = false) String nuevaUrl) { 
+
+        try {
+            Institucion actualizada = directorioService.actualizarParametrosRestringidos(bic, nuevoEstado, nuevaUrl);
+            return ResponseEntity.ok(actualizada);
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().build();
+        }
+
     }
 }
