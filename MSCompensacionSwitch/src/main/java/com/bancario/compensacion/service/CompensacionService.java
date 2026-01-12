@@ -137,12 +137,12 @@ public class CompensacionService {
     public void acumularMovimiento(Integer cicloId, String bic, BigDecimal monto, boolean esDebito) {
         log.info("Acumulando {} para BIC: {}", monto, bic);
 
-        // 1. Buscamos la posición existente O creamos una nueva en ceros
+        
         PosicionInstitucion posicion = posicionRepository.findByCicloId(cicloId).stream()
                 .filter(p -> p.getCodigoBic().equals(bic))
                 .findFirst()
                 .orElseGet(() -> {
-                    // Si no existe, la creamos al vuelo
+                    
                     CicloCompensacion ciclo = cicloRepository.findById(cicloId)
                             .orElseThrow(() -> new ResourceNotFoundException("Ciclo no encontrado"));
                     PosicionInstitucion nueva = new PosicionInstitucion();
@@ -154,50 +154,48 @@ public class CompensacionService {
                     return nueva;
                 });
 
-        // 2. Acumulamos matemáticas (BigDecimal es inmutable, ojo)
+        
         if (esDebito) {
             posicion.setTotalDebitos(posicion.getTotalDebitos().add(monto));
         } else {
             posicion.setTotalCreditos(posicion.getTotalCreditos().add(monto));
         }
 
-        // 3. Recalculamos el Neto (Créditos - Débitos)
+        
         posicion.setNeto(posicion.getTotalCreditos().subtract(posicion.getTotalDebitos()));
 
         posicionRepository.save(posicion);
     }
 
-    // --- NUEVO: LÓGICA DE CIERRE DIARIO Y GENERACIÓN DE ARCHIVO ---
 
     @Transactional
     public ArchivoDTO realizarCierreDiario(Integer cicloId) {
         log.info(">>> INICIANDO CIERRE CONTABLE DEL CICLO: {}", cicloId);
 
-        // 1. Obtener todas las posiciones del ciclo
+        
         List<PosicionInstitucion> posiciones = posicionRepository.findByCicloId(cicloId);
 
         if (posiciones.isEmpty()) {
             throw new RuntimeException("No hay movimientos en el ciclo " + cicloId);
         }
 
-        // 2. VERIFICACIÓN MATEMÁTICA (La prueba de fuego)
-        // Sumamos todos los netos. La suma DEBE ser 0.00
+        
         BigDecimal sumaNetos = posiciones.stream()
                 .map(PosicionInstitucion::getNeto)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
         log.info(">>> SUMA TOTAL DE NETOS: {}", sumaNetos);
 
-        // Validamos con un margen de error mínimo (0.01) por temas de redondeo
+        
         if (sumaNetos.abs().compareTo(new BigDecimal("0.01")) > 0) {
             log.error("ALERTA GRAVE: El ciclo no cuadra. Descuadre de: {}", sumaNetos);
-            // OJO: En un banco real esto detiene el mundo. Aquí lanzamos excepción.
+            
             throw new RuntimeException("ERROR DE CONCILIACIÓN: La suma de netos no es cero. Descuadre: " + sumaNetos);
         }
         
         log.info(">>> CONCILIACIÓN EXITOSA: El sistema está cuadrado (Suma = 0).");
 
-        // 3. Generar contenido del Archivo XML (Settlement File) simulado
+        
         StringBuilder xml = new StringBuilder();
         xml.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
         xml.append("<SettlementFile>\n");
@@ -211,11 +209,11 @@ public class CompensacionService {
             xml.append("      <Bank>").append(pos.getCodigoBic()).append("</Bank>\n");
             xml.append("      <NetPosition>").append(pos.getNeto()).append("</NetPosition>\n");
             
-            // Lógica visual: ¿Quién paga y quién recibe?
+            
             if (pos.getNeto().compareTo(BigDecimal.ZERO) >= 0) {
-                xml.append("      <Action>RECEIVE</Action>\n"); // Tiene saldo a favor
+                xml.append("      <Action>RECEIVE</Action>\n"); 
             } else {
-                xml.append("      <Action>PAY</Action>\n");     // Debe pagar
+                xml.append("      <Action>PAY</Action>\n");     
             }
             xml.append("    </Tx>\n");
         }
@@ -226,7 +224,7 @@ public class CompensacionService {
         String contenidoXml = xml.toString();
         log.info("ARCHIVO XML GENERADO:\n{}", contenidoXml);
 
-        // 4. Guardar registro del archivo (Simulamos envío al Banco Central)
+        
         CicloCompensacion ciclo = cicloRepository.findById(cicloId)
                 .orElseThrow(() -> new ResourceNotFoundException("Ciclo no encontrado"));
         
@@ -234,10 +232,10 @@ public class CompensacionService {
         archivo.setCiclo(ciclo);
         archivo.setNombre("SETTLEMENT_CICLO_" + cicloId + "_" + System.currentTimeMillis() + ".xml");
         archivo.setCanalEnvio("BCE_DIRECT_LINK");
-        archivo.setEstado("ENVIADO"); // Asumimos éxito
+        archivo.setEstado("ENVIADO"); 
         archivo.setFechaGeneracion(java.time.LocalDateTime.now());
         
-        // 5. CERRAR EL CICLO (Ya nadie puede operar aquí)
+        
         ciclo.setEstado("CERRADO");
         cicloRepository.save(ciclo);
 
