@@ -3,17 +3,25 @@ services:
   # 1. TUS MICROSERVICIOS (Java + Postgres)
   # ==========================================
   directorio-db:
-    image: postgres:15-alpine
+    image: mongo:latest
     environment:
-      POSTGRES_DB: directorio_db
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: admin
-    ports: [ "5433:5432" ]
+      
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=admin
+    ports: [ "27017:27017" ]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 5s
       retries: 5
-
+  redis-switch:
+    image: redis:7-alpine
+    container_name: redis-switch
+    ports: [ "6379:6379" ]
+    command: redis-server --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 5
   ms-directorio:
     build: 
       context: ./ms-directorio
@@ -22,12 +30,14 @@ services:
     ports: [ "8081:8081" ]
     environment:
       - SERVER_PORT=8081
-      - SPRING_DATASOURCE_URL=jdbc:postgresql://directorio-db:5432/directorio_db
-      - SPRING_DATASOURCE_USERNAME=postgres
-      - SPRING_DATASOURCE_PASSWORD=admin
-      - SPRING_JPA_HIBERNATE_DDL_AUTO=update
+      - SPRING_DATA_MONGODB_URI=mongodb://admin:admin@directorio-db:27017/directorio_db?authSource=admin
+      - SPRING_DATA_REDIS_HOST=redis-switch
+      - SPRING_DATA_REDIS_PORT=6379
+      - TZ=UTC
     depends_on:
       directorio-db:
+        condition: service_healthy
+      redis-switch:
         condition: service_healthy
 
   # ==========================================
