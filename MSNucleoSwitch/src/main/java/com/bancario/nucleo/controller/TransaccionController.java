@@ -1,6 +1,7 @@
 package com.bancario.nucleo.controller;
 
 import com.bancario.nucleo.dto.TransaccionResponseDTO;
+import com.bancario.nucleo.dto.ReturnRequestDTO;
 import com.bancario.nucleo.service.TransaccionService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -25,7 +26,8 @@ public class TransaccionController {
 
     @PostMapping
     @Operation(summary = "Procesar transacción ISO 20022", description = "Endpoint estándar para interoperabilidad")
-    public ResponseEntity<TransaccionResponseDTO> crearTransaccion(@Valid @RequestBody com.bancario.nucleo.dto.iso.MensajeISO mensajeIso) {
+    public ResponseEntity<TransaccionResponseDTO> crearTransaccion(
+            @Valid @RequestBody com.bancario.nucleo.dto.iso.MensajeISO mensajeIso) {
         log.info("Recibido mensaje ISO: {}", mensajeIso.getHeader().getMessageId());
         TransaccionResponseDTO response = transaccionService.procesarTransaccionIso(mensajeIso);
         return new ResponseEntity<>(response, HttpStatus.CREATED);
@@ -36,6 +38,14 @@ public class TransaccionController {
     public ResponseEntity<TransaccionResponseDTO> obtenerTransaccion(@PathVariable @NonNull UUID id) {
         log.info("REST request para obtener transacción: {}", id);
         TransaccionResponseDTO response = transaccionService.obtenerTransaccion(id);
+        return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/devoluciones")
+    @Operation(summary = "Procesar devolución (pacs.004)", description = "Pass-through para el procesamiento de devoluciones en Contabilidad")
+    public ResponseEntity<?> procesarDevolucion(@RequestBody ReturnRequestDTO returnRequest) {
+        log.info("Recibida solicitud de devolución: {}", returnRequest.getHeader().getMessageId());
+        Object response = transaccionService.procesarDevolucion(returnRequest);
         return ResponseEntity.ok(response);
     }
 }

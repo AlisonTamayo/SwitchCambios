@@ -194,7 +194,7 @@ public class CompensacionService {
             // OJO: En un banco real esto detiene el mundo. Aquí lanzamos excepción.
             throw new RuntimeException("ERROR DE CONCILIACIÓN: La suma de netos no es cero. Descuadre: " + sumaNetos);
         }
-        
+
         log.info(">>> CONCILIACIÓN EXITOSA: El sistema está cuadrado (Suma = 0).");
 
         // 3. Generar contenido del Archivo XML (Settlement File) simulado
@@ -210,12 +210,12 @@ public class CompensacionService {
             xml.append("    <Tx>\n");
             xml.append("      <Bank>").append(pos.getCodigoBic()).append("</Bank>\n");
             xml.append("      <NetPosition>").append(pos.getNeto()).append("</NetPosition>\n");
-            
+
             // Lógica visual: ¿Quién paga y quién recibe?
             if (pos.getNeto().compareTo(BigDecimal.ZERO) >= 0) {
                 xml.append("      <Action>RECEIVE</Action>\n"); // Tiene saldo a favor
             } else {
-                xml.append("      <Action>PAY</Action>\n");     // Debe pagar
+                xml.append("      <Action>PAY</Action>\n"); // Debe pagar
             }
             xml.append("    </Tx>\n");
         }
@@ -229,14 +229,14 @@ public class CompensacionService {
         // 4. Guardar registro del archivo (Simulamos envío al Banco Central)
         CicloCompensacion ciclo = cicloRepository.findById(cicloId)
                 .orElseThrow(() -> new ResourceNotFoundException("Ciclo no encontrado"));
-        
+
         ArchivoLiquidacion archivo = new ArchivoLiquidacion();
         archivo.setCiclo(ciclo);
         archivo.setNombre("SETTLEMENT_CICLO_" + cicloId + "_" + System.currentTimeMillis() + ".xml");
         archivo.setCanalEnvio("BCE_DIRECT_LINK");
         archivo.setEstado("ENVIADO"); // Asumimos éxito
         archivo.setFechaGeneracion(java.time.LocalDateTime.now());
-        
+
         // 5. CERRAR EL CICLO (Ya nadie puede operar aquí)
         ciclo.setEstado("CERRADO");
         cicloRepository.save(ciclo);
