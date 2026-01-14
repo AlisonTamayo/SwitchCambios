@@ -8,9 +8,9 @@ import jakarta.validation.constraints.NotBlank;
 @Data
 public class BodyISO {
     @NotBlank
-    private String instructionId; // CLAVE DE IDEMPOTENCIA
+    private String instructionId; 
     
-    private String endToEndId;    // Referencia Cliente
+    private String endToEndId;    
     
     @Valid
     @NotNull
@@ -18,11 +18,11 @@ public class BodyISO {
     
     @Valid
     @NotNull
-    private ActorISO debtor;   // Quien envía
+    private ActorISO debtor;   
     
     @Valid
     @NotNull
-    private ActorISO creditor; // Quien recibe (Incluye targetBankId)
+    private ActorISO creditor;
     
-    private String remittanceInformation; // Motivo
+    private String remittanceInformation; 
 }
