@@ -37,12 +37,12 @@ public class DirectorioService {
 
     public Institucion registrarInstitucion(@NonNull Institucion institucion) {
 
-        if (institucion.get_id() == null) {
-            throw new IllegalArgumentException("El BIC (_id) no puede ser nulo");
+        if (institucion.getCodigoBic() == null) {
+            throw new IllegalArgumentException("El codigoBic no puede ser nulo");
         }
 
-        if (institucionRepository.existsById(institucion.get_id())) {
-            throw new RuntimeException("El banco con BIC " + institucion.get_id() + " ya existe.");
+        if (institucionRepository.findByCodigoBic(institucion.getCodigoBic()).isPresent()) {
+            throw new RuntimeException("El banco con BIC " + institucion.getCodigoBic() + " ya existe.");
         }
 
         if (institucion.getInterruptorCircuito() == null) {
@@ -64,12 +64,12 @@ public class DirectorioService {
         if (bic == null)
             return Optional.empty();
 
-        return institucionRepository.findById(bic)
+        return institucionRepository.findByCodigoBic(bic)
                 .filter(this::validarDisponibilidad);
     }
 
     public Institucion aniadirRegla(@NonNull String bic, @NonNull ReglaEnrutamiento nuevaRegla) {
-        Institucion inst = institucionRepository.findById(bic)
+        Institucion inst = institucionRepository.findByCodigoBic(bic)
                 .orElseThrow(() -> new RuntimeException("Banco no encontrado: " + bic));
 
         if (inst.getReglasEnrutamiento() == null) {
@@ -95,7 +95,7 @@ public class DirectorioService {
         return institucionRepository.findByReglasEnrutamientoPrefijoBin(bin)
                 .filter(this::validarDisponibilidad)
                 .map(inst -> {
-                    
+
                     redisTemplate.opsForValue().set(cacheKey, inst, Duration.ofHours(1));
                     return inst;
                 });
@@ -105,7 +105,7 @@ public class DirectorioService {
         if (bic == null)
             return;
 
-        institucionRepository.findById(bic).ifPresent(inst -> {
+        institucionRepository.findByCodigoBic(bic).ifPresent(inst -> {
             InterruptorCircuito interruptor = inst.getInterruptorCircuito();
             if (interruptor == null) {
                 interruptor = new InterruptorCircuito(false, 0, null);
@@ -141,22 +141,28 @@ public class DirectorioService {
 
         if (interruptor.getUltimoFallo() != null) {
             long segundos = ChronoUnit.SECONDS.between(interruptor.getUltimoFallo(), LocalDateTime.now(ZoneOffset.UTC));
-            
-            return segundos > 60;
+
+            if (segundos > 30) {
+                interruptor.setEstaAbierto(false);
+                interruptor.setFallosConsecutivos(0);
+                institucionRepository.save(inst);
+                log.info(">>> CIRCUIT BREAKER CERRADO (Auto-recuperación) para banco: {}", inst.getCodigoBic());
+                return true;
+            }
+            return false;
         }
 
         return false;
     }
 
     public Institucion actualizarParametrosRestringidos(String bic, String nuevoEstado, String nuevaUrl) {
-        
-        Institucion inst = institucionRepository.findById(bic)
+
+        Institucion inst = institucionRepository.findByCodigoBic(bic)
                 .orElseThrow(() -> new RuntimeException("Institución no encontrada"));
 
-        
         if (nuevoEstado != null) {
-           try {
-                
+            try {
+
                 Institucion.Estado estadoEnum = Institucion.Estado.valueOf(nuevoEstado.toUpperCase());
                 inst.setEstadoOperativo(estadoEnum.name());
             } catch (IllegalArgumentException e) {
@@ -165,8 +171,7 @@ public class DirectorioService {
         }
 
         if (nuevaUrl != null && !nuevaUrl.isBlank()) {
-            if (inst.getDatosTecnicos() == null) inst.setDatosTecnicos(new DatosTecnicos());
-            inst.getDatosTecnicos().setUrlDestino(nuevaUrl);
+            inst.setUrlDestino(nuevaUrl);
         }
 
         invalidarCacheDelBanco(inst);

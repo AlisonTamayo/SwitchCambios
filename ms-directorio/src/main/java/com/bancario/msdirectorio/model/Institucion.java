@@ -19,11 +19,15 @@ import lombok.Setter;
 public class Institucion {
 
     @Id
-    private String _id;
+    private String id;
+
+    @Indexed(unique = true)
+    private String codigoBic;
 
     private String nombre;
 
-    private DatosTecnicos datosTecnicos;
+    private String urlDestino;
+    private String llavePublica;
 
     @Indexed
     private String estadoOperativo;
@@ -35,6 +39,6 @@ public class Institucion {
     public enum Estado {
         ONLINE,
         OFFLINE,
-        MANT 
+        MANT
     }
 }

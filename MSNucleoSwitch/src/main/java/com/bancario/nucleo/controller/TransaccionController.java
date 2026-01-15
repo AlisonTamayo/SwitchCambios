@@ -2,7 +2,9 @@ package com.bancario.nucleo.controller;
 
 import com.bancario.nucleo.dto.TransaccionResponseDTO;
 import com.bancario.nucleo.dto.ReturnRequestDTO;
+import com.bancario.nucleo.model.Transaccion;
 import com.bancario.nucleo.service.TransaccionService;
+import java.util.List;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -23,6 +25,12 @@ import java.util.UUID;
 public class TransaccionController {
 
     private final TransaccionService transaccionService;
+
+    @GetMapping
+    @Operation(summary = "Listar últimas transacciones", description = "Dashboard endpoint")
+    public ResponseEntity<List<Transaccion>> listarTransacciones() {
+        return ResponseEntity.ok(transaccionService.listarUltimasTransacciones());
+    }
 
     @PostMapping
     @Operation(summary = "Procesar transacción ISO 20022", description = "Endpoint estándar para interoperabilidad")
@@ -47,5 +55,20 @@ public class TransaccionController {
         log.info("Recibida solicitud de devolución: {}", returnRequest.getHeader().getMessageId());
         Object response = transaccionService.procesarDevolucion(returnRequest);
         return ResponseEntity.ok(response);
+    }
+
+    @GetMapping("/busqueda")
+    @Operation(summary = "Buscador Avanzado", description = "Filtros para Traceability")
+    public ResponseEntity<List<Transaccion>> buscar(
+            @RequestParam(required = false) String id,
+            @RequestParam(required = false) String bic,
+            @RequestParam(required = false) String estado) {
+        return ResponseEntity.ok(transaccionService.buscarTransacciones(id, bic, estado));
+    }
+
+    @GetMapping("/stats")
+    @Operation(summary = "KPIs Dashboard", description = "Métricas tiempo real para Torre de Control")
+    public ResponseEntity<?> obtenerStats() {
+        return ResponseEntity.ok(transaccionService.obtenerEstadisticas());
     }
 }

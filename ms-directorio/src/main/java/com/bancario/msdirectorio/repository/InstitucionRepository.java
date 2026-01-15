@@ -14,6 +14,8 @@ public interface InstitucionRepository extends MongoRepository<Institucion, Stri
 
     Optional<Institucion> findByReglasEnrutamientoPrefijoBin(String prefijoBin);
 
+    Optional<Institucion> findByCodigoBic(String codigoBic);
+
     List<Institucion> findByEstadoOperativo(String estadoOperativo);
 
     @Query("{ 'interruptorCircuito.estaAbierto' : true }")

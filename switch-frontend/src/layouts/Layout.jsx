@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Building2, BookOpen, Menu, X, Bell } from 'lucide-react';
+import { LayoutDashboard, Building2, BookOpen, Menu, X, Bell, Activity } from 'lucide-react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -15,7 +15,9 @@ export default function Layout() {
     const navigation = [
         { name: 'Torre de Control', href: '/dashboard', icon: LayoutDashboard },
         { name: 'Bancos', href: '/bancos', icon: Building2 },
+        { name: 'Transacciones', href: '/transacciones', icon: Activity },
         { name: 'Contabilidad', href: '/contabilidad', icon: BookOpen },
+        { name: 'Compensación', href: '/compensacion', icon: Activity }, // Recycling icon or import a new one like Scale
     ];
 
     return (

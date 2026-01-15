@@ -22,17 +22,21 @@ public class CompensacionController {
 
     private final CompensacionService service;
 
-
     @GetMapping("/ciclos")
     @Operation(summary = "Listar ciclos", description = "Obtiene el historial de todos los ciclos operativos.")
     public ResponseEntity<List<CicloCompensacion>> listarCiclos() {
         return ResponseEntity.ok(service.listarCiclos());
     }
 
+    @GetMapping("/ciclos/{cicloId}/posiciones")
+    @Operation(summary = "Obtener detalle de posiciones", description = "Ver acumulados netos por banco")
+    public ResponseEntity<List<com.bancario.compensacion.model.PosicionInstitucion>> obtenerPosiciones(
+            @PathVariable Integer cicloId) {
+        return ResponseEntity.ok(service.obtenerPosicionesCiclo(cicloId));
+    }
 
     @PostMapping("/ciclos/{cicloId}/acumular")
-    @Operation(summary = "INTERNAL: Acumular movimiento", 
-               description = "Endpoint de alta velocidad usado por el Núcleo para registrar débitos/créditos en tiempo real.")
+    @Operation(summary = "INTERNAL: Acumular movimiento", description = "Endpoint de alta velocidad usado por el Núcleo para registrar débitos/créditos en tiempo real.")
     public ResponseEntity<Void> acumular(
             @PathVariable Integer cicloId,
             @RequestParam String bic,
@@ -44,8 +48,7 @@ public class CompensacionController {
     }
 
     @PostMapping("/ciclos/{cicloId}/cierre")
-    @Operation(summary = "EJECUTAR CIERRE DIARIO (Settlement)", 
-               description = "1. Valida Suma Cero. 2. Genera XML. 3. Firma Digital (JWS). 4. Cierra el ciclo actual. 5. Abre el siguiente ciclo arrastrando saldos (Continuidad).")
+    @Operation(summary = "EJECUTAR CIERRE DIARIO (Settlement)", description = "1. Valida Suma Cero. 2. Genera XML. 3. Firma Digital (JWS). 4. Cierra el ciclo actual. 5. Abre el siguiente ciclo arrastrando saldos (Continuidad).")
     public ResponseEntity<ArchivoLiquidacion> cerrarCiclo(@PathVariable Integer cicloId) {
         return ResponseEntity.ok(service.realizarCierreDiario(cicloId));
     }

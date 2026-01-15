@@ -5,7 +5,10 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.util.UUID;
+import java.util.List;
 
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -47,6 +50,9 @@ public class TransaccionService {
 
     @Value("${service.compensacion.url:http://ms-compensacion:8084}")
     private String compensacionUrl;
+
+    @Value("${service.devolucion.url:http://ms-devolucion:8085}")
+    private String devolucionUrl;
 
     private static final Integer CICLO_ACTUAL_ID = 1;
 
@@ -120,7 +126,10 @@ public class TransaccionService {
         Transaccion tx = new Transaccion();
         tx.setIdInstruccion(idInstruccion);
         tx.setIdMensaje(messageId);
-        tx.setReferenciaRed("SWITCH-" + System.currentTimeMillis());
+        // Requirement: MD5(monto + originatingBankId + targetBankId + creationDateTime
+        // + cuentas)
+        String rawRef = monto.toString() + bicOrigen + bicDestino + creationDateTime + cuentaOrigen + cuentaDestino;
+        tx.setReferenciaRed(generarMD5(rawRef).toUpperCase());
         tx.setMonto(monto);
         tx.setMoneda(moneda);
         tx.setCodigoBicOrigen(bicOrigen);
@@ -144,10 +153,12 @@ public class TransaccionService {
             notificarCompensacion(bicOrigen, monto, true);
             notificarCompensacion(bicDestino, monto, false);
 
-            // 6. Forwarding con Política de Reintentos Determinista (RF-01)
+            // 6. Forwarding con Política de Reintentos Determinista (RF-01) + Circuit
+            // Breaker (RNF-AVA-02)
             int[] tiemposEspera = { 0, 800, 2000, 4000 };
             boolean entregado = false;
             String ultimoError = "";
+            int fallosConsecutivos = 0; // Para Circuit Breaker
 
             for (int intento = 0; intento < tiemposEspera.length; intento++) {
                 if (tiemposEspera[intento] > 0) {
@@ -162,17 +173,43 @@ public class TransaccionService {
                     String urlWebhook = bancoDestinoInfo.getUrlDestino();
                     log.info("Intento #{}: Enviando a {}", intento + 1, urlWebhook);
 
+                    // RNF-AVA-02: Medir latencia
+                    long startTime = System.currentTimeMillis();
                     restTemplate.postForEntity(urlWebhook, iso, String.class);
+                    long latencia = System.currentTimeMillis() - startTime;
 
-                    log.info("Webhook: Entregado exitosamente.");
+                    log.info("Webhook: Entregado exitosamente en {}ms", latencia);
+
+                    // RNF-AVA-02: Detectar latencias altas (>4s)
+                    if (latencia > 4000) {
+                        log.warn("LATENCIA ALTA detectada en {}: {}ms", bicDestino, latencia);
+                        reportarFalloAlDirectorio(bicDestino, "LATENCIA_ALTA");
+                    }
+
                     entregado = true;
                     break;
 
-                } catch (HttpClientErrorException | org.springframework.web.client.HttpServerErrorException e) {
-                    log.error("Rechazo definitivo del Banco Destino: {}", e.getStatusCode());
+                } catch (HttpClientErrorException e) {
+                    log.error("Rechazo 4xx del Banco Destino: {}", e.getStatusCode());
                     throw new BusinessException("Banco Destino rechazó la transacción: " + e.getStatusCode());
+
+                } catch (org.springframework.web.client.HttpServerErrorException e) {
+                    // RNF-AVA-02: Error HTTP 5xx → Reportar fallo
+                    log.error("Error 5xx del Banco Destino: {}", e.getStatusCode());
+                    fallosConsecutivos++;
+                    reportarFalloAlDirectorio(bicDestino, "HTTP_5XX");
+                    ultimoError = "HTTP 5xx: " + e.getStatusCode();
+
+                } catch (org.springframework.web.client.ResourceAccessException e) {
+                    // RNF-AVA-02: Timeout o fallo de conexión TCP/TLS
+                    log.error("Timeout/Conexión fallida con Banco Destino: {}", e.getMessage());
+                    fallosConsecutivos++;
+                    reportarFalloAlDirectorio(bicDestino, "TIMEOUT_CONEXION");
+                    ultimoError = "Timeout/Conexión: " + e.getMessage();
+
                 } catch (Exception e) {
                     log.warn("Fallo intento #{}: {}", intento + 1, e.getMessage());
+                    fallosConsecutivos++;
                     ultimoError = e.getMessage();
                 }
             }
@@ -181,8 +218,11 @@ public class TransaccionService {
                 tx.setEstado("COMPLETED");
                 guardarRespaldoIdempotencia(tx, "EXITO");
             } else {
+                // RNF-AVA-02: Se agotaron reintentos → Reportar fallo final
                 log.error("TIMEOUT: Se agotaron los reintentos. Último error: {}", ultimoError);
-                tx.setEstado("PENDING");
+                reportarFalloAlDirectorio(bicDestino, "REINTENTOS_AGOTADOS");
+                reportarFalloAlDirectorio(bicDestino, "REINTENTOS_AGOTADOS");
+                tx.setEstado("TIMEOUT"); // Requirement: Transitar obligatoriamente al estado TIMEOUT
                 transaccionRepository.save(tx);
 
                 throw new java.util.concurrent.TimeoutException("No se obtuvo respuesta del Banco Destino");
@@ -195,9 +235,14 @@ public class TransaccionService {
 
         } catch (BusinessException e) {
             log.error("Error de Negocio: {}", e.getMessage());
+            // SAGA PATTERN: Si falla aquí, el dinero YA SE MOVIÓ en Ledger (lines 144/147).
+            // DEBEMOS REVERTIRLO.
+            ejecutarReversoSaga(tx);
             tx.setEstado("FAILED");
         } catch (Exception e) {
             log.error("Error crítico en Tx: {}", e.getMessage());
+            // Tambien revertir en errores inesperados post-ledger
+            ejecutarReversoSaga(tx);
             tx.setEstado("FAILED");
         }
 
@@ -209,8 +254,8 @@ public class TransaccionService {
         Transaccion tx = transaccionRepository.findById(id)
                 .orElseThrow(() -> new BusinessException("Transacción no encontrada"));
 
-        // RF-04: Consulta de Sondeo (Active Polling)
-        if ("PENDING".equals(tx.getEstado()) || "RECEIVED".equals(tx.getEstado())) {
+        // RF-04: Consulta de Sondeo (Active Polling) - Now allows TIMEOUT state
+        if ("PENDING".equals(tx.getEstado()) || "RECEIVED".equals(tx.getEstado()) || "TIMEOUT".equals(tx.getEstado())) {
 
             if (tx.getFechaCreacion() != null &&
                     tx.getFechaCreacion().plusSeconds(5).isBefore(LocalDateTime.now())) {
@@ -261,21 +306,98 @@ public class TransaccionService {
         // check returnInstructionId presence
 
         log.info("Procesando solicitud de devolución para instrucción original: {}", originalId);
+        String returnId = returnRequest.getHeader().getMessageId(); // Usamos MessageId del Return como ID de
+                                                                    // Idempotencia del proceso
+        // Ojo: Si el ReturnRequestDTO tuviera un campo especifico 'returnInstructionId'
+        // seria mejor, pero usaremos el messageID del header si es unico.
+        // Asumiendo que el DTO tiene Header con MessageID.
+
+        // RF-07.5: Idempotencia en Returns
+        String redisKey = "idem:return:" + returnId;
+        String fingerprint = returnId + originalId + returnRequest.getBody().getReturnAmount().getValue(); // MD5 simple
+        String fingerprintMd5 = generarMD5(fingerprint);
+        String redisValue = fingerprintMd5 + "|PROCESSING|-";
+
+        Boolean claimed;
+        try {
+            claimed = redisTemplate.opsForValue().setIfAbsent(redisKey, redisValue, java.time.Duration.ofHours(24));
+        } catch (Exception e) {
+            log.error(
+                    "Fallo Redis SET (Return): {}. Asumiendo nuevo por seguridad (o fallback DB si existiera tabla de returns).",
+                    e.getMessage());
+            claimed = true; // Simplificado: Si Redis falla en Return, permitimos reprocesar (Ledger tiene
+                            // su propio control de duplicados).
+        }
+
+        if (Boolean.FALSE.equals(claimed)) {
+            log.warn("Duplicado detectado en Return (Redis Hit) — Replay {}", returnId);
+            // Si ya fue procesado, deberíamos retornar la respuesta 'cachéada' o
+            // simplemente una confirmación
+            // Dado que el return no retorna un objeto complejo sino void/status, devolvemos
+            // OK dummy o el stored.
+            return "RETURN_ALREADY_PROCESSED";
+        }
+
+        // 0. Registrar Auditoría Legal en MS-DEVOLUCION (Integración RF-07 Completa)
+        String urlDevolucionCreate = devolucionUrl + "/api/v1/devoluciones";
+        UUID returnUuid = UUID.fromString(returnId.replace("RET-", "").replace("MSG-", "")); // Ajuste: si el msgId no
+                                                                                             // es UUID, lo generamos.
+                                                                                             // Mejor usar
+                                                                                             // UUID.randomUUID() si no
+                                                                                             // estamos seguros, pero la
+                                                                                             // idempotencia depende del
+                                                                                             // ID.
+        // Simulamos un UUID válido derivado o random si el messageId no es UUID.
+        try {
+            returnUuid = UUID.fromString(returnId);
+        } catch (IllegalArgumentException e) {
+            returnUuid = UUID.randomUUID(); // Fallback si el header no es UUID.
+        }
+
+        try {
+            // Creamos DTO "on the fly" o usamos Map para no añadir dependencias circulares
+            // complejas
+            java.util.Map<String, Object> reqDev = new java.util.HashMap<>();
+            reqDev.put("id", returnUuid);
+            reqDev.put("idInstruccionOriginal", UUID.fromString(originalId));
+            reqDev.put("codigoMotivo", returnRequest.getBody().getReturnReason()); // ej AC04
+            reqDev.put("estado", "RECEIVED");
+
+            restTemplate.postForEntity(urlDevolucionCreate, reqDev, Object.class);
+            log.info("MS-Devoluciones: Solicitud registrada correctamente id={}", returnUuid);
+
+        } catch (HttpClientErrorException e) {
+            log.error("MS-Devoluciones rechazó el registro (Motivo Inválido?): {}", e.getResponseBodyAsString());
+            throw new BusinessException(
+                    "Error de validación legal del motivo (MS-Devolucion): " + e.getResponseBodyAsString());
+        } catch (Exception e) {
+            // Si el servicio de auditoria legal cae... ¿Bloqueamos el dinero?
+            // RF dice: "Diccionario de codigos ISO...". Es crítico.
+            log.error("Error contactando MS-Devoluciones: {}", e.getMessage());
+            throw new BusinessException("Servicio de Auditoría de Devoluciones no disponible.");
+        }
 
         // 1. Delegar Validación y Reverso Financiero a CONTABILIDAD
         String urlLedger = contabilidadUrl + "/api/v1/ledger/v2/switch/transfers/return";
         Object responseLedger;
+        String estadoFinalDevolucion = "FAILED";
 
         try {
             responseLedger = restTemplate.postForObject(urlLedger, returnRequest, Object.class);
             log.info("Contabilidad: Reverso financiero EXITOSO para {}", originalId);
+            estadoFinalDevolucion = "REVERSED"; // Exito
         } catch (HttpClientErrorException e) {
             log.error("Contabilidad rechazó el reverso: {}", e.getResponseBodyAsString());
+            actualizarEstadoDevolucion(returnUuid, "FAILED");
             throw new BusinessException("Rechazo de Contabilidad: " + e.getResponseBodyAsString());
         } catch (Exception e) {
             log.error("Error de comunicación con Contabilidad: {}", e.getMessage());
+            actualizarEstadoDevolucion(returnUuid, "FAILED");
             throw new BusinessException("Error de comunicación con Contabilidad: " + e.getMessage());
         }
+
+        // Actualizar MS-Devolucion a REVERSED
+        actualizarEstadoDevolucion(returnUuid, estadoFinalDevolucion);
 
         // 2. Actualizar Estado en NUCLEO (Switch)
         Transaccion originalTx = transaccionRepository.findById(UUID.fromString(originalId))
@@ -313,7 +435,8 @@ public class TransaccionService {
             InstitucionDTO banco = restTemplate.getForObject(url, InstitucionDTO.class);
 
             // RF-01.2: Check Bank Status
-            if (banco != null && "SUSPENDIDO".equalsIgnoreCase(banco.getEstadoOperativo())) {
+            if (banco != null && ("SUSPENDIDO".equalsIgnoreCase(banco.getEstadoOperativo())
+                    || "MANT".equalsIgnoreCase(banco.getEstadoOperativo()))) {
                 throw new BusinessException("El banco " + bic + " se encuentra en MANTENIMIENTO/SUSPENDIDO.");
             }
             if (banco != null && "SOLO_RECIBIR".equalsIgnoreCase(banco.getEstadoOperativo())) {
@@ -387,6 +510,121 @@ public class TransaccionService {
                 .build();
     }
 
+    public List<Transaccion> listarUltimasTransacciones() {
+        return transaccionRepository.findAll(PageRequest.of(0, 50, Sort.by("fechaCreacion").descending())).getContent();
+    }
+
+    /**
+     * RNF-AVA-02: Circuit Breaker - Reportar fallo al Directorio
+     * Notifica al ms-directorio sobre fallos técnicos del banco destino
+     * para que active el Circuit Breaker si se superan los umbrales.
+     */
+    private void reportarFalloAlDirectorio(String bic, String tipoFallo) {
+        try {
+            String urlReporte = directorioUrl + "/api/v1/instituciones/" + bic + "/reportar-fallo";
+            log.info("RNF-AVA-02: Reportando fallo de tipo '{}' para banco {}", tipoFallo, bic);
+
+            restTemplate.postForEntity(urlReporte, null, Void.class);
+
+        } catch (Exception e) {
+            // No bloqueante: Si el directorio falla, no detenemos la transacción
+            log.warn("No se pudo reportar fallo al Directorio para {}: {}", bic, e.getMessage());
+        }
+    }
+
+    private void ejecutarReversoSaga(Transaccion tx) {
+        try {
+            log.warn("SAGA COMPENSACIÓN: Iniciando reverso local para Tx {}", tx.getIdInstruccion());
+            // Invertir origen/destino para devolver saldo
+            // DEBITO al Destino (que habia recibido credito)
+            // CREDITO al Origen (que habia perdido fondos)
+            // O simplemente llamar a "registrarMovimientoContable" con lógica inversa.
+
+            // Nota: Nuestra lógica contable previa fue:
+            // Origen -> DEBIT
+            // Destino -> CREDIT
+
+            // Reverso:
+            // Origen -> CREDIT (Devolver)
+            // Destino -> DEBIT (Quitar)
+
+            registrarMovimientoContable(tx.getCodigoBicOrigen(), tx.getIdInstruccion(), tx.getMonto(), "CREDIT");
+            registrarMovimientoContable(tx.getCodigoBicDestino(), tx.getIdInstruccion(), tx.getMonto(), "DEBIT");
+
+            // Ajustar Compensacion (Inverso)
+            notificarCompensacion(tx.getCodigoBicOrigen(), tx.getMonto(), false); // false = CREDITO
+            notificarCompensacion(tx.getCodigoBicDestino(), tx.getMonto(), true); // true = DEBITO
+
+            log.info("SAGA COMPENSACIÓN: Reverso completado exitosamente.");
+        } catch (Exception e) {
+            log.error("CRITICAL: Fallo en Saga de Reverso. Inconsistencia Contable posible. {}", e.getMessage());
+            // Aquí se debería enviar una alerta CRITICA a monitorización externa
+        }
+    }
+
+    public List<Transaccion> buscarTransacciones(String id, String bic, String estado) {
+        return transaccionRepository.buscarTransacciones(
+                (id != null && !id.isBlank()) ? id : null,
+                (bic != null && !bic.isBlank()) ? bic : null,
+                (estado != null && !estado.isBlank()) ? estado : null);
+    }
+
+    public java.util.Map<String, Object> obtenerEstadisticas() {
+        LocalDateTime start = LocalDateTime.now().minusHours(24);
+
+        long total = transaccionRepository.countTransaccionesDesde(start);
+        BigDecimal volumen = transaccionRepository.sumMontoExitosoDesde(start);
+        List<Object[]> porEstado = transaccionRepository.countPorEstadoDesde(start);
+
+        java.util.Map<String, Object> stats = new java.util.HashMap<>();
+        stats.put("totalTransactions24h", total);
+        stats.put("totalVolumeExample", volumen != null ? volumen : BigDecimal.ZERO);
+
+        // Calculate Success Rate
+        long exitosas = 0;
+        for (Object[] row : porEstado) {
+            String status = (String) row[0];
+            long count = (Long) row[1];
+            if ("COMPLETED".equals(status)) {
+                exitosas = count;
+            }
+            stats.put("count_" + status, count);
+        }
+
+        double tasaExito = (total > 0) ? ((double) exitosas / total) * 100 : 0.0;
+        stats.put("successRate", Math.round(tasaExito * 100.0) / 100.0);
+
+        // TPS (Transactions Per Second - naive approx over 24h is too low, maybe last
+        // minute?)
+        // For Dashboard demo, let's assume average over 24h
+        double tps = (total > 0) ? (double) total / (24 * 3600) : 0.0;
+        stats.put("tps", Math.round(tps * 1000.0) / 1000.0);
+
+        return stats;
+    }
+
+    private void actualizarEstadoDevolucion(UUID id, String estado) {
+        try {
+            // Simulación de llamada PATCH/POST para actualizar estado
+            // Usamos POST o PUT segun disponibilidad. Asumiremos que el endpoint acepta un
+            // simple map o query param.
+            try {
+                // restTemplate.put(devolucionUrl + "/api/v1/devoluciones/" + id + "/estado",
+                // params);
+                // Ojo: Si el controller de MS-Devolucion usa @RequestBody, params viajan en
+                // body.
+                restTemplate.put(devolucionUrl + "/api/v1/devoluciones/" + id + "/estado?estado=" + estado, null);
+            } catch (Exception ex) {
+                log.warn("Fallo actualizacion estado devolucion: " + ex.getMessage());
+            }
+
+            log.info("MS-Devolucion: Intento de actualizar estado a {} para {}", estado, id);
+
+        } catch (Exception e) {
+            log.warn("No se pudo actualizar el estado de la devolución en auditoría: {}", e.getMessage());
+        }
+    }
+
     private String generarMD5(String input) {
         try {
             MessageDigest md = MessageDigest.getInstance("MD5");
@@ -397,7 +635,6 @@ public class TransaccionService {
                 hex.append(String.format("%02x", b));
             }
             return hex.toString();
-
         } catch (Exception e) {
             throw new RuntimeException("Error generando MD5", e);
         }

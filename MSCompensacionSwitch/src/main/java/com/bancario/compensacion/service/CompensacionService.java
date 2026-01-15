@@ -10,14 +10,17 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 
-
 @Service
 public class CompensacionService {
 
-    @Autowired private CicloCompensacionRepository cicloRepo;
-    @Autowired private PosicionInstitucionRepository posicionRepo;
-    @Autowired private ArchivoLiquidacionRepository archivoRepo;
-    @Autowired private SeguridadService seguridadService;
+    @Autowired
+    private CicloCompensacionRepository cicloRepo;
+    @Autowired
+    private PosicionInstitucionRepository posicionRepo;
+    @Autowired
+    private ArchivoLiquidacionRepository archivoRepo;
+    @Autowired
+    private SeguridadService seguridadService;
 
     @Transactional
     public void acumularTransaccion(Integer cicloId, String bic, BigDecimal monto, boolean esDebito) {
@@ -101,9 +104,9 @@ public class CompensacionService {
             PosicionInstitucion posNueva = new PosicionInstitucion();
             posNueva.setCiclo(guardado);
             posNueva.setCodigoBic(posAnt.getCodigoBic());
-            
-            posNueva.setSaldoInicial(posAnt.getNeto()); 
-            
+
+            posNueva.setSaldoInicial(posAnt.getNeto());
+
             posNueva.setTotalDebitos(BigDecimal.ZERO);
             posNueva.setTotalCreditos(BigDecimal.ZERO);
             posNueva.recalcularNeto(); // Neto arranca igual al saldo inicial
@@ -114,18 +117,18 @@ public class CompensacionService {
 
     private String generarXML(CicloCompensacion ciclo, List<PosicionInstitucion> posiciones) {
         StringBuilder sb = new StringBuilder();
-        
+
         sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-        
+
         sb.append("<SettlementFile xmlns=\"http://bancario.switch/settlement/v1\">\n");
-        
+
         sb.append("  <Header>\n");
         sb.append("    <MsgId>MSG-LIQ-").append(System.currentTimeMillis()).append("</MsgId>\n");
         sb.append("    <CycleId>").append(ciclo.getNumeroCiclo()).append("</CycleId>\n");
         sb.append("    <CreationDate>").append(LocalDateTime.now()).append("</CreationDate>\n");
         sb.append("    <TotalRecords>").append(posiciones.size()).append("</TotalRecords>\n");
         sb.append("  </Header>\n");
-        
+
         sb.append("  <Transactions>\n");
         for (PosicionInstitucion p : posiciones) {
             sb.append("    <Tx>\n");
@@ -135,13 +138,27 @@ public class CompensacionService {
             sb.append("    </Tx>\n");
         }
         sb.append("  </Transactions>\n");
-        
+
         sb.append("</SettlementFile>");
-        
+
         return sb.toString();
     }
-    
+
     public List<CicloCompensacion> listarCiclos() {
-        return cicloRepo.findAll();
+        List<CicloCompensacion> ciclos = cicloRepo.findAll();
+        if (ciclos.isEmpty()) {
+            CicloCompensacion primerCiclo = new CicloCompensacion();
+            primerCiclo.setNumeroCiclo(1);
+            primerCiclo.setDescripcion("Ciclo Inicial");
+            primerCiclo.setEstado("ABIERTO");
+            primerCiclo.setFechaApertura(LocalDateTime.now());
+            cicloRepo.save(primerCiclo);
+            ciclos.add(primerCiclo);
+        }
+        return ciclos;
+    }
+
+    public List<PosicionInstitucion> obtenerPosicionesCiclo(Integer cicloId) {
+        return posicionRepo.findByCicloId(cicloId);
     }
 }
