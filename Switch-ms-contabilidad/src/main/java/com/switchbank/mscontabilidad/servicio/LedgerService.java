@@ -49,6 +49,10 @@ public class LedgerService {
         CuentaTecnica cuenta = cuentaRepo.findByCodigoBic(req.getCodigoBic())
                 .orElseThrow(() -> new RuntimeException("Cuenta no encontrada para BIC: " + req.getCodigoBic()));
 
+        if (movimientoRepo.findByIdInstruccion(req.getIdInstruccion()).isPresent()) {
+            return mapToDTO(cuenta);
+        }
+
         String hashActual = calcularHash(cuenta);
         if (!hashActual.equals(cuenta.getFirmaIntegridad())) {
             throw new RuntimeException(
