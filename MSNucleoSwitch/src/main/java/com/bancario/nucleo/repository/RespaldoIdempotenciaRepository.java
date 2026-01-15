@@ -8,4 +8,5 @@ import java.util.UUID;
 
 @Repository
 public interface RespaldoIdempotenciaRepository extends JpaRepository<RespaldoIdempotencia, UUID> {
+    java.util.Optional<RespaldoIdempotencia> findByHashContenido(String hashContenido);
 }

@@ -71,31 +71,63 @@ public class TransaccionService {
         String redisKey = "idem:" + idInstruccion;
         String redisValue = fingerprintMd5 + "|PROCESSING|-";
 
-        Boolean claimed = redisTemplate.opsForValue().setIfAbsent(redisKey, redisValue, java.time.Duration.ofHours(24));
+        Boolean claimed;
+        try {
+            claimed = redisTemplate.opsForValue().setIfAbsent(redisKey, redisValue, java.time.Duration.ofHours(24));
+        } catch (Exception e) {
+            log.error("Fallo Redis SET: {}", e.getMessage());
+            // Si falla el SET, asumimos que NO existe (Fail Open) o consultamos DB.
+            // Para ser consistentes con RF-03, consultamos DB ya.
+            boolean existeEnDb = idempotenciaRepository.findByHashContenido("HASH_" + idInstruccion).isPresent();
+            if (existeEnDb) {
+                claimed = false; // Ya existe
+            } else {
+                claimed = true; // No existe, intentar procesar
+            }
+        }
 
         if (Boolean.TRUE.equals(claimed)) {
             log.info("Redis CLAIM OK — Nueva transacción {}", idInstruccion);
         } else {
-            String existing = redisTemplate.opsForValue().get(redisKey);
+            String existing;
+            try {
+                existing = redisTemplate.opsForValue().get(redisKey);
+            } catch (Exception e) {
+                log.error("Redis no disponible, usando Fallback DB para Idempotencia: {}", e.getMessage());
+                // Fallback RF-03: Si Redis falla, consultar la base de datos de respaldo
+                return idempotenciaRepository.findByHashContenido("HASH_" + idInstruccion)
+                        .map(respaldo -> {
+                            log.warn("Recuperado desde DB (Respaldo Idempotencia) para {}", idInstruccion);
+                            // Convertir el JSON guardado en respaldo a DTO
+                            Transaccion txDb = respaldo.getTransaccion();
+                            return mapToDTO(txDb);
+                        })
+                        .orElseGet(() -> {
+                            // Si no existe en DB, asumimos que es nueva (Riesgo aceptado ante fallo de
+                            // Redis)
+                            log.info(
+                                    "No encontrado en DB Backup, procesando como nueva transacción pese a fallo redis.");
+                            return null;
+                        });
+            }
 
             if (existing == null) {
-                throw new IllegalStateException("Redis inconsistente");
+                // Caso raro o fallback devolvió null (no existe)
+            } else {
+                String[] parts = existing.split("\\|");
+                String storedMd5 = parts[0];
+
+                if (!storedMd5.equals(fingerprintMd5)) {
+                    log.error("VIOLACIÓN DE INTEGRIDAD ISO 20022 — InstructionId={} alterado", idInstruccion);
+                    throw new SecurityException("Same InstructionId, different content fingerprint");
+                }
+
+                log.warn("Duplicado legítimo ISO 20022 — Replay {}", idInstruccion);
+                return obtenerTransaccion(idInstruccion);
             }
-
-            String[] parts = existing.split("\\|");
-            String storedMd5 = parts[0];
-            String storedStatus = parts[1];
-
-            if (!storedMd5.equals(fingerprintMd5)) {
-                log.error("VIOLACIÓN DE INTEGRIDAD ISO 20022 — InstructionId={} alterado", idInstruccion);
-                throw new SecurityException(
-                        "Same InstructionId, different content fingerprint");
-            }
-
-            log.warn("Duplicado legítimo ISO 20022 — Replay {}", idInstruccion);
-
-            return obtenerTransaccion(idInstruccion);
         }
+
+        // Si llegamos aqui, es null (nueva) o fallback no encontró
 
         Transaccion tx = new Transaccion();
         tx.setIdInstruccion(idInstruccion);
@@ -203,6 +235,64 @@ public class TransaccionService {
     public TransaccionResponseDTO obtenerTransaccion(UUID id) {
         Transaccion tx = transaccionRepository.findById(id)
                 .orElseThrow(() -> new BusinessException("Transacción no encontrada"));
+
+        // RF-04: Consulta de Sondeo (Active Polling)
+        if ("PENDING".equals(tx.getEstado()) || "RECEIVED".equals(tx.getEstado())) {
+
+            // Regla: Si ha pasado más de 5 segundos (timeout del switch) y sigue pending...
+            if (tx.getFechaCreacion() != null &&
+                    tx.getFechaCreacion().plusSeconds(5).isBefore(LocalDateTime.now())) {
+
+                log.info("RF-04: Transacción {} en estado incierto. Iniciando SONDING al Banco Destino...", id);
+
+                try {
+                    InstitucionDTO bancoDestino = validarBanco(tx.getCodigoBicDestino());
+                    String urlConsulta = bancoDestino.getUrlDestino() + "/status/" + id; // Convención standard
+
+                    // Asumimos que el banco destino retorna un objeto estandar de estado
+                    // Ojo: El RF dice "Si no se obtiene estado definitivo -> FAILED"
+                    // Vamos a intentar obtener un estado
+                    try {
+                        // Usar un DTO simple o String y parsear.
+                        // Para este ejemplo, esperamos un JSON que contenga "estado": "COMPLETED" o
+                        // "FAILED"
+                        // Usaremos TransaccionResponseDTO como contenedor genérico si coinciden campos
+                        TransaccionResponseDTO respuestaBanco = restTemplate.getForObject(urlConsulta,
+                                TransaccionResponseDTO.class);
+
+                        if (respuestaBanco != null && respuestaBanco.getEstado() != null) {
+                            String nuevoEstado = respuestaBanco.getEstado();
+                            if ("COMPLETED".equals(nuevoEstado) || "FAILED".equals(nuevoEstado)) {
+                                log.info("RF-04: Resolución obtenida. Estado actualizado a {}", nuevoEstado);
+                                tx.setEstado(nuevoEstado);
+                                tx = transaccionRepository.save(tx);
+
+                                // Actualizar idempotencia final si aplica
+                                if ("COMPLETED".equals(nuevoEstado)) {
+                                    guardarRespaldoIdempotencia(tx, "EXITO (RECUPERADO)");
+                                }
+                            }
+                        }
+                    } catch (Exception e2) {
+                        log.warn("RF-04: Falló el sondeo al banco destino: {}", e2.getMessage());
+                        // Regla: Si después de intentar no se obtiene respuesta, y ya pasó el tiempo
+                        // max (60s)...
+                        // Aqui simplificamos: Si falla el sondeo puntual, retornamos lo que hay
+                        // (PENDING)
+                        // o aplicamos la regla de "Tiempo máximo de resolución: 60 segundos".
+                        if (tx.getFechaCreacion().plusSeconds(60).isBefore(LocalDateTime.now())) {
+                            log.error("RF-04: Tiempo máximo de resolución agotado (60s). Marcando FAILED.");
+                            tx.setEstado("FAILED");
+                            tx = transaccionRepository.save(tx);
+                        }
+                    }
+
+                } catch (Exception e) {
+                    log.error("Error intentando resolver estado de tx {}", id, e);
+                }
+            }
+        }
+
         return mapToDTO(tx);
     }
 

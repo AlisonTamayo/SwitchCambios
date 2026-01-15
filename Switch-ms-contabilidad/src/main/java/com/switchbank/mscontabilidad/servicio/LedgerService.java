@@ -139,8 +139,8 @@ public class LedgerService {
                 .orElseThrow(
                         () -> new RuntimeException("Transacción original no encontrada: " + originalInstructionId));
 
-        if (original.getFechaRegistro().isBefore(LocalDateTime.now().minusHours(48))) {
-            throw new RuntimeException("La transacción original es mayor a 48 horas, no se puede revertir.");
+        if (original.getFechaRegistro().isBefore(LocalDateTime.now().minusHours(24))) {
+            throw new RuntimeException("La transacción original es mayor a 24 horas, no se puede revertir.");
         }
         if (movimientoRepo.existsByTipoAndReferenciaId(TipoMovimiento.REVERSAL, originalInstructionId)) {
             throw new RuntimeException("DUPLICADO: Esta transacción ya ha sido revertida anteriormente.");
