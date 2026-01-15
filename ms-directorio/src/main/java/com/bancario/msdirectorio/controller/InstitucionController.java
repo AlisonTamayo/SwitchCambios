@@ -90,13 +90,12 @@ public class InstitucionController {
         return ResponseEntity.ok().build();
     }
 
-
     @Operation(summary = "RF-02: Actualización técnica restringida (Estado y API Key)")
     @PatchMapping("/instituciones/{bic}/operaciones")
     public ResponseEntity<Institucion> actualizarOperaciones(
             @PathVariable String bic,
             @RequestParam(required = false) String nuevoEstado,
-            @RequestParam(required = false) String nuevaUrl) { 
+            @RequestParam(required = false) String nuevaUrl) {
 
         try {
             Institucion actualizada = directorioService.actualizarParametrosRestringidos(bic, nuevoEstado, nuevaUrl);

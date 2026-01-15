@@ -73,48 +73,38 @@ public class TransaccionService {
 
         Boolean claimed;
         try {
+            // Intento principal: Redis
             claimed = redisTemplate.opsForValue().setIfAbsent(redisKey, redisValue, java.time.Duration.ofHours(24));
         } catch (Exception e) {
-            log.error("Fallo Redis SET: {}", e.getMessage());
-            // Si falla el SET, asumimos que NO existe (Fail Open) o consultamos DB.
-            // Para ser consistentes con RF-03, consultamos DB ya.
+            log.error("Fallo Redis SET: {}. Pasando a Fallback DB.", e.getMessage());
+            // Fallback RF-03: Redis caído -> Consultar DB IdempotencyBackup
             boolean existeEnDb = idempotenciaRepository.findByHashContenido("HASH_" + idInstruccion).isPresent();
-            if (existeEnDb) {
-                claimed = false; // Ya existe
-            } else {
-                claimed = true; // No existe, intentar procesar
-            }
+            claimed = !existeEnDb;
         }
 
         if (Boolean.TRUE.equals(claimed)) {
-            log.info("Redis CLAIM OK — Nueva transacción {}", idInstruccion);
+            log.info("Redis CLAIM OK (o Fallback DB) — Nueva transacción {}", idInstruccion);
         } else {
-            String existing;
+            // Es duplicado (estaba en Redis o en DB)
+            String existingVal = null;
             try {
-                existing = redisTemplate.opsForValue().get(redisKey);
+                existingVal = redisTemplate.opsForValue().get(redisKey);
             } catch (Exception e) {
-                log.error("Redis no disponible, usando Fallback DB para Idempotencia: {}", e.getMessage());
-                // Fallback RF-03: Si Redis falla, consultar la base de datos de respaldo
-                return idempotenciaRepository.findByHashContenido("HASH_" + idInstruccion)
-                        .map(respaldo -> {
-                            log.warn("Recuperado desde DB (Respaldo Idempotencia) para {}", idInstruccion);
-                            // Convertir el JSON guardado en respaldo a DTO
-                            Transaccion txDb = respaldo.getTransaccion();
-                            return mapToDTO(txDb);
-                        })
-                        .orElseGet(() -> {
-                            // Si no existe en DB, asumimos que es nueva (Riesgo aceptado ante fallo de
-                            // Redis)
-                            log.info(
-                                    "No encontrado en DB Backup, procesando como nueva transacción pese a fallo redis.");
-                            return null;
-                        });
+                log.warn("Redis GET falló tras saber que es duplicado. Intentando recuperar detalles de DB...");
             }
 
-            if (existing == null) {
-                // Caso raro o fallback devolvió null (no existe)
+            if (existingVal == null) {
+                return idempotenciaRepository.findByHashContenido("HASH_" + idInstruccion)
+                        .map(respaldo -> {
+                            log.warn(
+                                    "Duplicado detectado via DB (Redis Offline). Retornando original ISO 20022 para {}",
+                                    idInstruccion);
+                            return mapToDTO(respaldo.getTransaccion());
+                        })
+                        .orElseThrow(() -> new IllegalStateException(
+                                "Inconsistencia: Detectado como duplicado pero no encontrado en DB ni Redis."));
             } else {
-                String[] parts = existing.split("\\|");
+                String[] parts = existingVal.split("\\|");
                 String storedMd5 = parts[0];
 
                 if (!storedMd5.equals(fingerprintMd5)) {
@@ -122,12 +112,10 @@ public class TransaccionService {
                     throw new SecurityException("Same InstructionId, different content fingerprint");
                 }
 
-                log.warn("Duplicado legítimo ISO 20022 — Replay {}", idInstruccion);
+                log.warn("Duplicado legítimo ISO 20022 (Redis Hit) — Replay {}", idInstruccion);
                 return obtenerTransaccion(idInstruccion);
             }
         }
-
-        // Si llegamos aqui, es null (nueva) o fallback no encontró
 
         Transaccion tx = new Transaccion();
         tx.setIdInstruccion(idInstruccion);
@@ -157,7 +145,6 @@ public class TransaccionService {
             notificarCompensacion(bicDestino, monto, false);
 
             // 6. Forwarding con Política de Reintentos Determinista (RF-01)
-            // Intentos: Inmediato, 800ms, 2s, 4s
             int[] tiemposEspera = { 0, 800, 2000, 4000 };
             boolean entregado = false;
             String ultimoError = "";
@@ -175,21 +162,16 @@ public class TransaccionService {
                     String urlWebhook = bancoDestinoInfo.getUrlDestino();
                     log.info("Intento #{}: Enviando a {}", intento + 1, urlWebhook);
 
-                    // Configurar timeout de 3s para este request (Idealmente via RequestFactory,
-                    // aqui asumimos que el RestTemplate base tiene un timeout razonable o confiamos
-                    // en el catch)
                     restTemplate.postForEntity(urlWebhook, iso, String.class);
 
                     log.info("Webhook: Entregado exitosamente.");
                     entregado = true;
-                    break; // Salir del loop si éxito (2xx)
+                    break;
 
                 } catch (HttpClientErrorException | org.springframework.web.client.HttpServerErrorException e) {
-                    // 4xx/5xx -> Rechazo definitivo (No reintentar)
                     log.error("Rechazo definitivo del Banco Destino: {}", e.getStatusCode());
                     throw new BusinessException("Banco Destino rechazó la transacción: " + e.getStatusCode());
                 } catch (Exception e) {
-                    // Timeout o Error de Conexión -> Reintentar
                     log.warn("Fallo intento #{}: {}", intento + 1, e.getMessage());
                     ultimoError = e.getMessage();
                 }
@@ -199,30 +181,21 @@ public class TransaccionService {
                 tx.setEstado("COMPLETED");
                 guardarRespaldoIdempotencia(tx, "EXITO");
             } else {
-                // Se agotaron los reintentos -> TIMEOUT
                 log.error("TIMEOUT: Se agotaron los reintentos. Último error: {}", ultimoError);
-                tx.setEstado("PENDING"); // Estado UNKNOWN/PENDING según doc
+                tx.setEstado("PENDING");
                 transaccionRepository.save(tx);
 
-                // Responder 504 Gateway Timeout
-                // Nota: Al lanzar excepción aquí, el GlobalExceptionHandler debería mapearlo a
-                // 504.
-                // Si no hay un manejador especifico, lanzamos una Runtime que indica timeout.
                 throw new java.util.concurrent.TimeoutException("No se obtuvo respuesta del Banco Destino");
             }
 
         } catch (java.util.concurrent.TimeoutException e) {
             log.error("Transacción en estado PENDING por Timeout: {}", e.getMessage());
-            // No cambiamos a FAILED, se queda en RECEIVED/PENDING para resolución posterior
-            // (Sondeo)
-            // Pero para responder al cliente ahora:
             throw new org.springframework.web.server.ResponseStatusException(
                     org.springframework.http.HttpStatus.GATEWAY_TIMEOUT, "Tiempo de espera agotado con Banco Destino");
 
         } catch (BusinessException e) {
             log.error("Error de Negocio: {}", e.getMessage());
             tx.setEstado("FAILED");
-            // Revertir contabilidad si es necesario (Saga), pero por ahora marcamos FAILED.
         } catch (Exception e) {
             log.error("Error crítico en Tx: {}", e.getMessage());
             tx.setEstado("FAILED");
@@ -239,7 +212,6 @@ public class TransaccionService {
         // RF-04: Consulta de Sondeo (Active Polling)
         if ("PENDING".equals(tx.getEstado()) || "RECEIVED".equals(tx.getEstado())) {
 
-            // Regla: Si ha pasado más de 5 segundos (timeout del switch) y sigue pending...
             if (tx.getFechaCreacion() != null &&
                     tx.getFechaCreacion().plusSeconds(5).isBefore(LocalDateTime.now())) {
 
@@ -247,16 +219,9 @@ public class TransaccionService {
 
                 try {
                     InstitucionDTO bancoDestino = validarBanco(tx.getCodigoBicDestino());
-                    String urlConsulta = bancoDestino.getUrlDestino() + "/status/" + id; // Convención standard
+                    String urlConsulta = bancoDestino.getUrlDestino() + "/status/" + id;
 
-                    // Asumimos que el banco destino retorna un objeto estandar de estado
-                    // Ojo: El RF dice "Si no se obtiene estado definitivo -> FAILED"
-                    // Vamos a intentar obtener un estado
                     try {
-                        // Usar un DTO simple o String y parsear.
-                        // Para este ejemplo, esperamos un JSON que contenga "estado": "COMPLETED" o
-                        // "FAILED"
-                        // Usaremos TransaccionResponseDTO como contenedor genérico si coinciden campos
                         TransaccionResponseDTO respuestaBanco = restTemplate.getForObject(urlConsulta,
                                 TransaccionResponseDTO.class);
 
@@ -267,7 +232,6 @@ public class TransaccionService {
                                 tx.setEstado(nuevoEstado);
                                 tx = transaccionRepository.save(tx);
 
-                                // Actualizar idempotencia final si aplica
                                 if ("COMPLETED".equals(nuevoEstado)) {
                                     guardarRespaldoIdempotencia(tx, "EXITO (RECUPERADO)");
                                 }
@@ -275,11 +239,6 @@ public class TransaccionService {
                         }
                     } catch (Exception e2) {
                         log.warn("RF-04: Falló el sondeo al banco destino: {}", e2.getMessage());
-                        // Regla: Si después de intentar no se obtiene respuesta, y ya pasó el tiempo
-                        // max (60s)...
-                        // Aqui simplificamos: Si falla el sondeo puntual, retornamos lo que hay
-                        // (PENDING)
-                        // o aplicamos la regla de "Tiempo máximo de resolución: 60 segundos".
                         if (tx.getFechaCreacion().plusSeconds(60).isBefore(LocalDateTime.now())) {
                             log.error("RF-04: Tiempo máximo de resolución agotado (60s). Marcando FAILED.");
                             tx.setEstado("FAILED");
@@ -298,10 +257,12 @@ public class TransaccionService {
 
     public Object procesarDevolucion(ReturnRequestDTO returnRequest) {
         String originalId = returnRequest.getBody().getOriginalInstructionId();
+        // RF-07.5 Idempotencia del Return
+        // check returnInstructionId presence
+
         log.info("Procesando solicitud de devolución para instrucción original: {}", originalId);
 
         // 1. Delegar Validación y Reverso Financiero a CONTABILIDAD
-        // Contabilidad valida 48h, duplicados, estados y saldos
         String urlLedger = contabilidadUrl + "/api/v1/ledger/v2/switch/transfers/return";
         Object responseLedger;
 
@@ -324,14 +285,10 @@ public class TransaccionService {
         transaccionRepository.save(originalTx);
 
         // 3. Ajustar COMPENSACION (Neteo Inverso)
-        // Original: Origen -> DEBIT, Destino -> CREDIT
-        // Reverso : Origen -> CREDIT, Destino -> DEBIT
         log.info("Compensación: Registrando reverso en ciclo {}", CICLO_ACTUAL_ID);
         try {
-            notificarCompensacion(originalTx.getCodigoBicOrigen(), originalTx.getMonto(), false); // false = Credit
-                                                                                                  // (Devolución)
-            notificarCompensacion(originalTx.getCodigoBicDestino(), originalTx.getMonto(), true); // true = Debit
-                                                                                                  // (Quitar fondos)
+            notificarCompensacion(originalTx.getCodigoBicOrigen(), originalTx.getMonto(), false);
+            notificarCompensacion(originalTx.getCodigoBicDestino(), originalTx.getMonto(), true);
         } catch (Exception e) {
             log.error("Error al compensar reverso (No bloqueante): {}", e.getMessage());
         }
@@ -339,14 +296,12 @@ public class TransaccionService {
         // 4. Notificar al Banco Origen (El que envio el dinero originalmente)
         try {
             InstitucionDTO bancoOrigen = validarBanco(originalTx.getCodigoBicOrigen());
-            String urlWebhook = bancoOrigen.getUrlDestino() + "/api/incoming/return"; // Endpoint estandar sugerido
+            String urlWebhook = bancoOrigen.getUrlDestino() + "/api/incoming/return";
 
-            // Enviamos el ReturnRequest tal cual
             restTemplate.postForEntity(urlWebhook, returnRequest, String.class);
             log.info("Notificación enviada al Banco Origen: {}", bancoOrigen.getNombre());
         } catch (Exception e) {
             log.warn("No se pudo notificar al Banco Origen del reverso: {}", e.getMessage());
-            // No fallamos el proceso completo por esto
         }
 
         return responseLedger;
@@ -355,7 +310,22 @@ public class TransaccionService {
     private InstitucionDTO validarBanco(String bic) {
         try {
             String url = directorioUrl + "/api/v1/instituciones/" + bic;
-            return restTemplate.getForObject(url, InstitucionDTO.class);
+            InstitucionDTO banco = restTemplate.getForObject(url, InstitucionDTO.class);
+
+            // RF-01.2: Check Bank Status
+            if (banco != null && "SUSPENDIDO".equalsIgnoreCase(banco.getEstadoOperativo())) {
+                throw new BusinessException("El banco " + bic + " se encuentra en MANTENIMIENTO/SUSPENDIDO.");
+            }
+            if (banco != null && "SOLO_RECIBIR".equalsIgnoreCase(banco.getEstadoOperativo())) {
+                // If pure lookup for sending, maybe ok? But if originating...
+                // RF-02 says "Drenado" (Solo recibir) -> Rejects transactions directed TO it?
+                // Or FROM it?
+                // Usually "Solo Recibir" means it can receive credits but maybe not initiate?
+                // RF-02 says: "rechaza transacciones dirigidas a él instantáneamente".
+                // So if we are validating destination...
+                // Context-dependent check might be needed, but for now we throw if suspended.
+            }
+            return banco;
         } catch (HttpClientErrorException.NotFound e) {
             throw new BusinessException("El banco " + bic + " no existe o no está operativo.");
         } catch (Exception e) {

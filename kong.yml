@@ -6,12 +6,54 @@ services:
     routes:
       - name: ruta-transacciones
         paths:
-          - /api/v1/transacciones
-        strip_path: false
+          - /transacciones
+        strip_path: true
         methods:
           - POST
     plugins:
-      # AQUÍ YA NO PONGAS PROMETHEUS
+      - name: key-auth
+        config:
+          key_names:
+            - apikey
+      - name: cors
+        config:
+          origins:
+            - "*"
+          methods:
+            - GET
+            - POST
+            - OPTIONS
+
+  - name: switch-directorio-service
+    url: http://ms-directorio:8081
+    routes:
+      - name: ruta-directorio
+        paths:
+          - /directorio
+        strip_path: true
+    plugins:
+      - name: key-auth
+        config:
+          key_names:
+            - apikey
+      - name: cors
+        config:
+          origins:
+            - "*"
+          methods:
+            - GET
+            - POST
+            - PATCH
+            - OPTIONS
+
+  - name: switch-contabilidad-service
+    url: http://ms-contabilidad:8083
+    routes:
+      - name: ruta-contabilidad
+        paths:
+          - /contabilidad
+        strip_path: true
+    plugins:
       - name: key-auth
         config:
           key_names:
