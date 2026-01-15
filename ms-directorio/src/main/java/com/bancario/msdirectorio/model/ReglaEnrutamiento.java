@@ -10,5 +10,5 @@ import lombok.Setter;
 @AllArgsConstructor
 public class ReglaEnrutamiento {
     private String prefijoBin;
-    private String agente; // "PICHECPXXXX"
+    private String agente; 
 }
