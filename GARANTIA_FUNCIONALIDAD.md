@@ -10,20 +10,20 @@ El sistema opera bajo una arquitectura de microservicios orquestada por **Kong A
 
 ```mermaid
 graph TD
-    User[Cliente / Banco] -->|HTTPS POST| Kong[Kong API Gateway]
-    Kong -->|Auth & Rate Limit| Nucleo[MS Núcleo (Orquestador)]
+    User["Cliente / Banco"] -->|"HTTPS POST"| Kong["Kong API Gateway"]
+    Kong -->|"Auth & Rate Limit"| Nucleo["MS Núcleo (Orquestador)"]
     
-    Nucleo -->|Validación| Directorio[MS Directorio (MongoDB)]
-    Nucleo -->|Idempotencia| Redis[(Redis Cache)]
-    Nucleo -->|Contabilidad| Ledger[MS Contabilidad (Postgres)]
-    Nucleo -->|Clearing| Comp[MS Compensación (Postgres)]
+    Nucleo -->|Validación| Directorio["MS Directorio (MongoDB)"]
+    Nucleo -->|Idempotencia| Redis[("Redis Cache")]
+    Nucleo -->|Contabilidad| Ledger["MS Contabilidad (Postgres)"]
+    Nucleo -->|Clearing| Comp["MS Compensación (Postgres)"]
     
     subgraph "Persistencia y Resiliencia"
-    Redis -->|Fallback| DB_Nucleo[(DB Núcleo)]
+    Redis -->|Fallback| DB_Nucleo[("DB Núcleo")]
     end
     
     subgraph "Destino"
-    Nucleo -->|Forwarding| BancoDestino[Banco Destino]
+    Nucleo -->|Forwarding| BancoDestino["Banco Destino"]
     end
 ```
 

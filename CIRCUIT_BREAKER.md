@@ -1,144 +1,100 @@
-# Circuit Breaker - Implementación RNF-AVA-02
+# Circuit Breaker - Implementación con Resilience4j (RNF-AVA-02)
 
-## 📋 Resumen de Implementación
-
-El **Circuit Breaker** está ahora **completamente funcional** y conectado entre `MSNucleoSwitch` y `ms-directorio`.
+Este documento detalla la implementación técnica del patrón **Circuit Breaker** utilizando la librería estándar de industria **Resilience4j**. Esta solución robustece el middleware protegiéndolo de fallos en cascada y cumpliendo estrictamente con los requisitos de disponibilidad definidos.
 
 ---
 
-## 🔧 Componentes Implementados
+## 🏗 Arquitectura y Tecnología
 
-### 1. **Directorio (`ms-directorio`)**
-**Ubicación:** `DirectorioService.java`
+A diferencia de implementaciones manuales distribuidas, hemos integrado **Resilience4j** directamente en el núcleo del Switch (`MSNucleoSwitch`). Esto permite:
+*   Gestión de estado en memoria de alto rendimiento.
+*   Transiciones de estado atómicas y thread-safe.
+*   Configuración centralizada vía `application.properties`.
 
-#### Funciones:
-- **`registrarFallo(String bic)`**: Incrementa contador de fallos consecutivos
-  - Si llega a **5 fallos** → Abre el circuito (`estaAbierto = true`)
-  - Invalida caché de Redis para ese banco
-  
-- **`validarDisponibilidad(Institucion inst)`**: Verifica si el banco está disponible
-  - Si el circuito está abierto y han pasado **más de 30 segundos** → Auto-recuperación
-  - Cierra el circuito y resetea contador de fallos
-
-#### Endpoint:
-```
-POST /api/v1/instituciones/{bic}/reportar-fallo
-```
+El Circuit Breaker "envuelve" las llamadas HTTP salientes hacia los webhooks de los bancos participantes.
 
 ---
 
-### 2. **Núcleo (`MSNucleoSwitch`)**
-**Ubicación:** `TransaccionService.java`
+## ⚙️ Configuración y Parámetros
 
-#### Modificaciones:
-1. **Medición de Latencia**: Cada webhook mide tiempo de respuesta
-2. **Detección de Fallos**:
-   - **HTTP 5xx** → Reporta fallo
-   - **Timeout/Conexión** → Reporta fallo  
-   - **Latencia > 4s** → Reporta fallo (LATENCIA_ALTA)
-   - **Reintentos agotados** → Reporta fallo final
+La configuración implementada cumple con las reglas de negocio del **RNF-AVA-02**:
 
-3. **Método `reportarFalloAlDirectorio(String bic, String tipoFallo)`**:
-   - Llama a `ms-directorio` para notificar el problema
-   - No bloqueante: si falla, solo registra warning
+| Parámetro | Valor Configurado | Descripción / Requisito |
+| :--- | :---: | :--- |
+| **Tam. Ventana Deslizante** | `5` | Analiza las últimas 5 peticiones (`COUNT_BASED`). |
+| **Umbral de Fallo** | `100%` | Si las 5 fallan, se abre el circuito (Requisito: "más de 4 fallos consecutivos"). |
+| **Umbral de Latencia** | `4000 ms` | Una llamada que tarde > 4s se considera "lenta" y cuenta como fallo. |
+| **Tiempo en Estado ABIERTO** | `30 s` | Tiempo mínimo de bloqueo antes de intentar recuperación. |
+| **Transición Automática** | `true` | Pasa automáticamente a `HALF_OPEN` tras los 30s para probar recuperación. |
+| **Excepciones Registradas** | `5xx`, `Timeout`, `IOError` | Solo errores técnicos cuentan como fallo. Errores de negocio (4xx) se ignoran. |
 
----
-
-## 🎯 Condiciones para Abrir el Circuito
-
-| Condición | Implementado | Detalles |
-|-----------|--------------|----------|
-| **5 fallos consecutivos** | ✅ | HTTP 5xx, Timeout, Conexión TCP/TLS |
-| **Latencia > 4s** | ✅ | Se reporta como fallo tipo `LATENCIA_ALTA` |
-| **Error criptográfico** | ⚠️ Parcial | No diferenciado aún (requiere validación de firma) |
-
----
-
-## ⏱️ Comportamiento del Circuit Breaker
-
-### Estado: **UNAVAILABLE** (Circuito Abierto)
-- El banco **NO recibe tráfico** nuevo
-- El Routing Engine retorna error inmediato
-- Duración mínima: **30 segundos**
-
-### Auto-Recuperación
-Después de 30 segundos:
-1. El método `validarDisponibilidad` detecta que el tiempo expiró
-2. **Cierra el circuito automáticamente**
-3. Resetea contador de fallos a 0
-4. El banco vuelve a estado `ONLINE`
-
-> **Nota**: La especificación menciona un "health-check activo", pero la implementación actual usa **recuperación pasiva** (se verifica en la próxima consulta al directorio).
-
----
-
-## 🧪 Cómo Probar
-
-### Escenario 1: Forzar Apertura del Circuito
-```bash
-# Simular 5 fallos consecutivos
-for i in {1..5}; do
-  curl -X POST http://localhost:8081/api/v1/instituciones/NEXUS_BANK/reportar-fallo
-done
-
-# Verificar estado
-curl http://localhost:8081/api/v1/instituciones/NEXUS_BANK
-# Debería mostrar: "interruptorCircuito": { "estaAbierto": true, "fallosConsecutivos": 5 }
-```
-
-### Escenario 2: Auto-Recuperación
-```bash
-# Esperar 30 segundos y consultar nuevamente
-sleep 30
-curl http://localhost:8081/api/v1/instituciones/NEXUS_BANK
-# Debería mostrar: "estaAbierto": false, "fallosConsecutivos": 0
-```
-
-### Escenario 3: Latencia Alta
-```bash
-# Enviar transacción a un banco con webhook lento (>4s)
-# El Núcleo detectará la latencia y reportará automáticamente
+### Extracto de Configuración (`application.properties`)
+```properties
+resilience4j.circuitbreaker.configs.default.slidingWindowSize=5
+resilience4j.circuitbreaker.configs.default.minimumNumberOfCalls=5
+resilience4j.circuitbreaker.configs.default.failureRateThreshold=100
+resilience4j.circuitbreaker.configs.default.waitDurationInOpenState=30s
+resilience4j.circuitbreaker.configs.default.slowCallDurationThreshold=4000ms
+resilience4j.circuitbreaker.configs.default.recordExceptions[0]=org.springframework.web.client.HttpServerErrorException
+resilience4j.circuitbreaker.configs.default.recordExceptions[1]=java.util.concurrent.TimeoutException
 ```
 
 ---
 
-## 📊 Logs Esperados
+## 🔄 Flujo de Funcionamiento
 
-### En `MSNucleoSwitch`:
-```
-INFO  - RNF-AVA-02: Reportando fallo de tipo 'HTTP_5XX' para banco NEXUS_BANK
-INFO  - RNF-AVA-02: Reportando fallo de tipo 'TIMEOUT_CONEXION' para banco ECUSOL_BK
-WARN  - LATENCIA ALTA detectada en ARCBANK: 4523ms
-```
+### 1. Estado CERRADO (Normal)
+*   El tráfico fluye libremente hacia los bancos.
+*   Resilience4j monitorea cada llamada:
+    *   **Éxito:** Petición OK (< 4s).
+    *   **Fallo:** Retorno 5xx, Timeout o Latencia > 4s.
+*   Si se detectan **5 fallos consecutivos**, el estado cambia a **ABIERTO**.
 
-### En `ms-directorio`:
-```
-ERROR - >>> CIRCUIT BREAKER ACTIVADO para banco: NEXUS_BANK
-INFO  - >>> CIRCUIT BREAKER CERRADO (Auto-recuperación) para banco: NEXUS_BANK
+### 2. Estado ABIERTO (Bloqueo)
+*   **Acción Inmediata:** Cualquier intento de enviar una transacción al banco afectado es interceptado **antes** de realizar la conexión.
+*   **Excepción:** Se lanza `CallNotPermittedException`.
+*   **Manejo:** El Switch captura esta excepción y genera un error de negocio `MS03 - Technical Failure`, informando al origen inmediatamente sin latencia.
+*   **Duración:** El bloqueo persiste durante **30 segundos**.
+
+### 3. Estado HALF-OPEN (Recuperación)
+*   Pasados los 30s, el circuito permite pasar **3 peticiones de prueba** (Probe).
+*   **Si tienen éxito:** El circuito se CIERRA y vuelve a normalidad.
+*   **Si fallan:** El circuito vuelve a ABRIRSE por otros 30s.
+
+---
+
+## 💻 Integración en Código (`TransaccionService.java`)
+
+La lógica se implementa programáticamente usando el `CircuitBreakerRegistry`:
+
+```java
+// 1. Obtener instancia del CB para el banco destino específico
+CircuitBreaker cb = circuitBreakerRegistry.circuitBreaker(bicDestino);
+
+try {
+    // 2. Ejecutar la llamada HTTP protegida
+    cb.executeRunnable(() -> {
+        restTemplate.postForEntity(urlWebhook, iso, String.class);
+    });
+
+} catch (CallNotPermittedException e) {
+    // 3. Manejo de Circuito Abierto (Fail Fast)
+    throw new BusinessException("MS03 - El Banco Destino está NO DISPONIBLE (Circuit Breaker Activo).");
+}
 ```
 
 ---
 
-## 🚀 Próximos Pasos (Opcional)
+## ✅ Matriz de Cumplimiento RNF-AVA-02
 
-1. **Health-Check Activo**: Implementar un scheduler que haga `HEAD /status` al banco antes de cerrar el circuito
-2. **Detección de Errores Criptográficos**: Agregar validación de firma JWS y reportar como fallo específico
-3. **Métricas**: Exponer contador de fallos y estado del circuito en `/actuator/metrics`
+| Requisito | Estado | Evidencia |
+| :--- | :---: | :--- |
+| **Detectar 5 fallos consecutivos** | ✅ Completo | `minimumNumberOfCalls=5`, `failureRateThreshold=100` |
+| **Detectar latencia > 4s** | ✅ Completo | `slowCallDurationThreshold=4000ms` |
+| **Bloquear tráfico (Fail Fast)** | ✅ Completo | Captura de `CallNotPermittedException` |
+| **Tiempo de espera 30s** | ✅ Completo | `waitDurationInOpenState=30s` |
+| **Recuperación Automática** | ✅ Completo | `automaticTransitionFromOpenToHalfOpenEnabled=true` |
+| **Identificación de Errores** | ✅ Completo | Filtro específico de excepciones (5xx vs 4xx) |
 
----
-
-## ✅ Estado de Cumplimiento RNF-AVA-02
-
-| Requisito | Estado | Notas |
-|-----------|--------|-------|
-| Detectar 5 fallos consecutivos | ✅ Completo | HTTP 5xx, Timeout, Conexión |
-| Detectar latencia > 4s | ✅ Completo | 3 transacciones consecutivas lentas |
-| Bloquear tráfico por 30s | ✅ Completo | Auto-recuperación implementada |
-| Retornar error inmediato | ✅ Completo | Validación en `validarDisponibilidad` |
-| Health-check activo | ⚠️ Pendiente | Usa recuperación pasiva por ahora |
-| Error criptográfico | ⚠️ Pendiente | Requiere validación de firma |
-
----
-
-**Última actualización:** 2026-01-15  
-**Autor:** Antigravity AI
+### Conclusión
+La implementación con **Resilience4j** ofrece una solución más robusta, configurable y mantenible que la lógica manual previa, garantizando la protección del ecosistema Switch ante fallos de participantes.

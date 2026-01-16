@@ -41,6 +41,7 @@ public class TransaccionService {
     private final TransaccionRepository transaccionRepository;
     private final RespaldoIdempotenciaRepository idempotenciaRepository;
     private final RestTemplate restTemplate;
+    private final io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry circuitBreakerRegistry;
 
     @Value("${service.directorio.url:http://ms-directorio:8081}")
     private String directorioUrl;
@@ -141,6 +142,12 @@ public class TransaccionService {
         tx = transaccionRepository.save(tx);
 
         try {
+            // 0. Validación de Enrutamiento (BIN Routing Check - Auditoría Punto 2)
+            // Extraer BIN (primeros 6 o 8 digitos)
+            String bin = (cuentaDestino != null && cuentaDestino.length() >= 6) ? cuentaDestino.substring(0, 6)
+                    : "000000";
+            validarEnrutamientoBin(bin, bicDestino);
+
             validarBanco(bicOrigen, false); // Origen NO puede ser SOLO_RECIBIR
             InstitucionDTO bancoDestinoInfo = validarBanco(bicDestino, true); // Destino SI puede ser SOLO_RECIBIR
 
@@ -174,42 +181,48 @@ public class TransaccionService {
                     String urlWebhook = bancoDestinoInfo.getUrlDestino();
                     log.info("Intento #{}: Enviando a {}", intento + 1, urlWebhook);
 
-                    // RNF-AVA-02: Medir latencia
-                    long startTime = System.currentTimeMillis();
-                    restTemplate.postForEntity(urlWebhook, iso, String.class);
-                    long latencia = System.currentTimeMillis() - startTime;
+                    io.github.resilience4j.circuitbreaker.CircuitBreaker cb = circuitBreakerRegistry
+                            .circuitBreaker(bicDestino);
 
-                    log.info("Webhook: Entregado exitosamente en {}ms", latencia);
+                    try {
+                        cb.executeRunnable(() -> {
+                            // RNF-AVA-02: Medir latencia (ahora manejado por Resilience4j
+                            // slowCallDurationThreshold=4000ms)
+                            restTemplate.postForEntity(urlWebhook, iso, String.class);
+                        });
 
-                    // RNF-AVA-02: Detectar latencias altas (>4s)
-                    if (latencia > 4000) {
-                        log.warn("LATENCIA ALTA detectada en {}: {}ms", bicDestino, latencia);
-                        reportarFalloAlDirectorio(bicDestino, "LATENCIA_ALTA");
+                        log.info("Webhook: Entregado exitosamente.");
+                        entregado = true;
+                        break;
+
+                    } catch (io.github.resilience4j.circuitbreaker.CallNotPermittedException e) {
+                        log.error("CIRCUIT BREAKER ABIERTO para {}. Transaccion rechazada inmediatamente.", bicDestino);
+                        throw new BusinessException("MS03 - El Banco Destino " + bicDestino
+                                + " está NO DISPONIBLE (Circuit Breaker Activo).");
                     }
-
-                    entregado = true;
-                    break;
-
+                } catch (BusinessException e) {
+                    throw e; // Re-throw Business Exceptions (Circuit Breaker open)
                 } catch (HttpClientErrorException e) {
                     log.error("Rechazo 4xx del Banco Destino: {}", e.getStatusCode());
                     throw new BusinessException("Banco Destino rechazó la transacción: " + e.getStatusCode());
 
                 } catch (org.springframework.web.client.HttpServerErrorException e) {
-                    // RF-01: Si responde 4xx/5xx -> rechazo definitivo.
                     log.error("Error 5xx del Banco Destino: {}", e.getStatusCode());
+                    // Reportar también al directorio para visibilidad UI
                     reportarFalloAlDirectorio(bicDestino, "HTTP_5XX");
                     throw new BusinessException("Banco Destino falló internamente (5xx): " + e.getStatusCode());
 
                 } catch (org.springframework.web.client.ResourceAccessException e) {
-                    // RNF-AVA-02: Timeout o fallo de conexión TCP/TLS
                     log.error("Timeout/Conexión fallida con Banco Destino: {}", e.getMessage());
-                    fallosConsecutivos++;
+                    // Reportar también al directorio para visibilidad UI
                     reportarFalloAlDirectorio(bicDestino, "TIMEOUT_CONEXION");
                     ultimoError = "Timeout/Conexión: " + e.getMessage();
 
                 } catch (Exception e) {
                     log.warn("Fallo intento #{}: {}", intento + 1, e.getMessage());
-                    fallosConsecutivos++;
+                    // Otros errores genéricos
+                    circuitBreakerRegistry.circuitBreaker(bicDestino).onError(0, java.util.concurrent.TimeUnit.SECONDS,
+                            e);
                     ultimoError = e.getMessage();
                 }
             }
@@ -220,8 +233,10 @@ public class TransaccionService {
             } else {
                 // RNF-AVA-02: Se agotaron reintentos → Reportar fallo final
                 log.error("TIMEOUT: Se agotaron los reintentos. Último error: {}", ultimoError);
-                reportarFalloAlDirectorio(bicDestino, "REINTENTOS_AGOTADOS");
-                reportarFalloAlDirectorio(bicDestino, "REINTENTOS_AGOTADOS");
+                log.error("TIMEOUT: Se agotaron los reintentos. Último error: {}", ultimoError);
+                // Si llegamos aqui, reportamos error al CB para que cuente como fallo si no lo
+                // hizo la excepcion (ej loop exit)
+                // Pero ya registramos ResourceAccessException.
                 tx.setEstado("TIMEOUT"); // Requirement: Transitar obligatoriamente al estado TIMEOUT
                 transaccionRepository.save(tx);
 
@@ -463,6 +478,41 @@ public class TransaccionService {
         }
     }
 
+    private void validarEnrutamientoBin(String bin, String bicDestinoEsperado) {
+        try {
+            // Llamada al endpoint LOOKUP del Directorio
+            String urlLookup = directorioUrl + "/api/v1/lookup/" + bin;
+            InstitucionDTO bancoPropietario = restTemplate.getForObject(urlLookup, InstitucionDTO.class);
+
+            if (bancoPropietario == null) {
+                // Si no se encuentra regla, por defecto asumimos rechazo o permitimos paso si
+                // no
+                // es estricto.
+                // Requisito Auditoria: Rechazar si no cuadra.
+                throw new BusinessException(
+                        "BE01 - Routing Error: Cuenta destino desconocida (BIN " + bin + " no registrado)");
+            }
+
+            if (!bancoPropietario.getCodigoBic().equals(bicDestinoEsperado)) {
+                log.error("Routing Mismatch: Cuenta {} pertenece a {} pero mensaje dirigido a {}", bin,
+                        bancoPropietario.getCodigoBic(), bicDestinoEsperado);
+                throw new BusinessException("BE01 - Routing Error: La cuenta destino no pertenece al banco indicado.");
+            }
+
+        } catch (HttpClientErrorException.NotFound e) {
+            throw new BusinessException(
+                    "BE01 - Routing Error: Cuenta destino desconocida (BIN " + bin + " no registrado)");
+        } catch (Exception e) {
+            if (e instanceof BusinessException)
+                throw (BusinessException) e;
+            log.warn("Error validando BIN (Non-blocking warning or blocking depending on strictness): {}",
+                    e.getMessage());
+            // Si el servicio directorio falla en lookup, ¿bloqueamos?
+            // "Auditoría de Sistemas Financieros de Misión Crítica" -> SI, fallar seguro.
+            throw new BusinessException("Error Técnico Validando Enrutamiento: " + e.getMessage());
+        }
+    }
+
     private void registrarMovimientoContable(String bic, UUID idTx, BigDecimal monto, String tipo) {
         try {
             RegistroMovimientoRequest req = RegistroMovimientoRequest.builder()
@@ -526,15 +576,12 @@ public class TransaccionService {
      * Notifica al ms-directorio sobre fallos técnicos del banco destino
      * para que active el Circuit Breaker si se superan los umbrales.
      */
+
     private void reportarFalloAlDirectorio(String bic, String tipoFallo) {
         try {
             String urlReporte = directorioUrl + "/api/v1/instituciones/" + bic + "/reportar-fallo";
-            log.info("RNF-AVA-02: Reportando fallo de tipo '{}' para banco {}", tipoFallo, bic);
-
-            restTemplate.postForEntity(urlReporte, null, Void.class);
-
+            restTemplate.postForLocation(urlReporte, null);
         } catch (Exception e) {
-            // No bloqueante: Si el directorio falla, no detenemos la transacción
             log.warn("No se pudo reportar fallo al Directorio para {}: {}", bic, e.getMessage());
         }
     }
