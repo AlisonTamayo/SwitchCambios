@@ -39,6 +39,8 @@ public class Institucion {
     public enum Estado {
         ONLINE,
         OFFLINE,
-        MANT
+        MANT,
+        SUSPENDIDO,
+        SOLO_RECIBIR
     }
 }

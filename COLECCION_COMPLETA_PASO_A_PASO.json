@@ -1,0 +1,316 @@
+{
+    "info": {
+        "_postman_id": "aa999999-8888-7777-6666-555555555555",
+        "name": "Guía de Pruebas Switch (Paso a Paso)",
+        "description": "Colección completa alineada a la guía PASO_A_PASO_PRUEBAS.md. Cubre los 7 pasos de validación.",
+        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+    },
+    "item": [
+        {
+            "name": "Paso 1: Configuración (Lectura)",
+            "item": [
+                {
+                    "name": "Verificar Bancos Registrados",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "apikey",
+                                "value": "NEXUS_SECRET_KEY_123",
+                                "type": "text"
+                            }
+                        ],
+                        "url": "http://localhost:8000/directorio/api/v1/instituciones"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Paso 2: Contabilidad (Lectura)",
+            "item": [
+                {
+                    "name": "Verificar Saldo BANCO_A",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "apikey",
+                                "value": "NEXUS_SECRET_KEY_123",
+                                "type": "text"
+                            }
+                        ],
+                        "url": "http://localhost:8000/contabilidad/api/v1/ledger/cuentas/BANCO_A"
+                    }
+                },
+                {
+                    "name": "Verificar Saldo BANCO_B",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "apikey",
+                                "value": "NEXUS_SECRET_KEY_123",
+                                "type": "text"
+                            }
+                        ],
+                        "url": "http://localhost:8000/contabilidad/api/v1/ledger/cuentas/BANCO_B"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Paso 3: Simular Transferencia Exita",
+            "item": [
+                {
+                    "name": "Enviar Transferencia (UUID Aleatorio)",
+                    "event": [
+                        {
+                            "listen": "prerequest",
+                            "script": {
+                                "exec": [
+                                    "pm.environment.set(\"uuid_random\", crypto.randomUUID());",
+                                    "pm.environment.set(\"msg_id\", 'MSG-' + Date.now());",
+                                    "pm.environment.set(\"iso_date\", new Date().toISOString());"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "apikey",
+                                "value": "NEXUS_SECRET_KEY_123",
+                                "type": "text"
+                            },
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json",
+                                "type": "text"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"header\": {\n        \"messageId\": \"{{msg_id}}\",\n        \"creationDateTime\": \"{{iso_date}}\",\n        \"originatingBankId\": \"BANCO_A\"\n    },\n    \"body\": {\n        \"instructionId\": \"{{uuid_random}}\",\n        \"amount\": { \"currency\": \"USD\", \"value\": 100.00 },\n        \"debtor\": { \"accountId\": \"CTA-123\", \"name\": \"Juan\" },\n        \"creditor\": { \"targetBankId\": \"BANCO_B\", \"accountId\": \"CTA-456\", \"name\": \"Maria\" }\n    }\n}"
+                        },
+                        "url": "http://localhost:8000/transacciones/api/v1/transacciones"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Paso 4: Trazabilidad",
+            "item": [
+                {
+                    "name": "Buscar Transacciones Recientes",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "apikey",
+                                "value": "NEXUS_SECRET_KEY_123",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "http://localhost:8000/transacciones/api/v1/transacciones/busqueda?estado=COMPLETED",
+                            "protocol": "http",
+                            "host": [
+                                "localhost"
+                            ],
+                            "port": "8000",
+                            "path": [
+                                "transacciones",
+                                "api",
+                                "v1",
+                                "transacciones",
+                                "busqueda"
+                            ],
+                            "query": [
+                                {
+                                    "key": "estado",
+                                    "value": "COMPLETED"
+                                }
+                            ]
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Paso 5: Idempotencia (RF-03)",
+            "item": [
+                {
+                    "name": "1. Enviar Transacción (UUID FIJO)",
+                    "event": [
+                        {
+                            "listen": "prerequest",
+                            "script": {
+                                "exec": [
+                                    "// IMPORTANTE: NO generamos UUID aleatorio aquí, usamos uno fijo en el Body para probar idempotencia."
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "apikey",
+                                "value": "NEXUS_SECRET_KEY_123",
+                                "type": "text"
+                            },
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json",
+                                "type": "text"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"header\": {\n        \"messageId\": \"MSG-IDEM-001\",\n        \"creationDateTime\": \"2024-01-20T12:00:00Z\",\n        \"originatingBankId\": \"BANCO_A\"\n    },\n    \"body\": {\n        \"instructionId\": \"UUID-FIJO-PARA-PRUEBA-12345\",\n        \"amount\": { \"currency\": \"USD\", \"value\": 50.00 },\n        \"debtor\": { \"accountId\": \"CTA-123\", \"name\": \"Juan\" },\n        \"creditor\": { \"targetBankId\": \"BANCO_B\", \"accountId\": \"CTA-456\", \"name\": \"Maria\" }\n    }\n}"
+                        },
+                        "url": "http://localhost:8000/transacciones/api/v1/transacciones"
+                    }
+                },
+                {
+                    "name": "2. Re-Enviar Misma Transacción (Debe ser Duplicado)",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "apikey",
+                                "value": "NEXUS_SECRET_KEY_123",
+                                "type": "text"
+                            },
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json",
+                                "type": "text"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"header\": {\n        \"messageId\": \"MSG-IDEM-001\",\n        \"creationDateTime\": \"2024-01-20T12:00:00Z\",\n        \"originatingBankId\": \"BANCO_A\"\n    },\n    \"body\": {\n        \"instructionId\": \"UUID-FIJO-PARA-PRUEBA-12345\",\n        \"amount\": { \"currency\": \"USD\", \"value\": 50.00 },\n        \"debtor\": { \"accountId\": \"CTA-123\", \"name\": \"Juan\" },\n        \"creditor\": { \"targetBankId\": \"BANCO_B\", \"accountId\": \"CTA-456\", \"name\": \"Maria\" }\n    }\n}"
+                        },
+                        "url": "http://localhost:8000/transacciones/api/v1/transacciones"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Paso 6: Mantenimiento (RF-02)",
+            "item": [
+                {
+                    "name": "1. Poner BANCO_B en MANTENIMIENTO",
+                    "request": {
+                        "method": "PATCH",
+                        "header": [
+                            {
+                                "key": "apikey",
+                                "value": "NEXUS_SECRET_KEY_123",
+                                "type": "text"
+                            }
+                        ],
+                        "url": "http://localhost:8000/directorio/api/v1/instituciones/BANCO_B/operaciones?nuevoEstado=OFFLINE"
+                    }
+                },
+                {
+                    "name": "2. Intento Transferencia a BANCO_B (Debe Fallar)",
+                    "event": [
+                        {
+                            "listen": "prerequest",
+                            "script": {
+                                "exec": [
+                                    "pm.environment.set(\"uuid_fail\", crypto.randomUUID());"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "apikey",
+                                "value": "NEXUS_SECRET_KEY_123",
+                                "type": "text"
+                            },
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json",
+                                "type": "text"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"header\": {\n        \"messageId\": \"MSG-FAIL-001\",\n        \"creationDateTime\": \"2024-01-20T12:00:00Z\",\n        \"originatingBankId\": \"BANCO_A\"\n    },\n    \"body\": {\n        \"instructionId\": \"{{uuid_fail}}\",\n        \"amount\": { \"currency\": \"USD\", \"value\": 10.00 },\n        \"debtor\": { \"accountId\": \"CTA-123\", \"name\": \"Juan\" },\n        \"creditor\": { \"targetBankId\": \"BANCO_B\", \"accountId\": \"CTA-456\", \"name\": \"Maria\" }\n    }\n}"
+                        },
+                        "url": "http://localhost:8000/transacciones/api/v1/transacciones"
+                    }
+                },
+                {
+                    "name": "3. Restaurar BANCO_B a ONLINE",
+                    "request": {
+                        "method": "PATCH",
+                        "header": [
+                            {
+                                "key": "apikey",
+                                "value": "NEXUS_SECRET_KEY_123",
+                                "type": "text"
+                            }
+                        ],
+                        "url": "http://localhost:8000/directorio/api/v1/instituciones/BANCO_B/operaciones?nuevoEstado=ONLINE"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Paso 7: Compensación (Clearing)",
+            "item": [
+                {
+                    "name": "1. Listar Ciclos (Directo 8084)",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": "http://localhost:8084/api/v1/compensacion/ciclos"
+                    }
+                },
+                {
+                    "name": "2. Obtener Ciclo Abierto (ID)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "var jsonData = pm.response.json();",
+                                    "var openCycle = jsonData.find(c => c.estado === 'ABIERTO');",
+                                    "if (openCycle) {",
+                                    "    pm.environment.set(\"current_cycle_id\", openCycle.id);",
+                                    "    console.log(\"Ciclo Abierto ID:\", openCycle.id);",
+                                    "}"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": "http://localhost:8084/api/v1/compensacion/ciclos"
+                    }
+                },
+                {
+                    "name": "3. Cerrar Ciclo Actual (Requiere ID Paso Anterior)",
+                    "request": {
+                        "method": "POST",
+                        "header": [],
+                        "url": "http://localhost:8084/api/v1/compensacion/ciclos/{{current_cycle_id}}/cierre"
+                    }
+                }
+            ]
+        }
+    ]
+}

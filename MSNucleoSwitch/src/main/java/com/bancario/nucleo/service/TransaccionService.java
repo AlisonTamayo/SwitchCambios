@@ -54,8 +54,6 @@ public class TransaccionService {
     @Value("${service.devolucion.url:http://ms-devolucion:8085}")
     private String devolucionUrl;
 
-    private static final Integer CICLO_ACTUAL_ID = 1;
-
     @Transactional
     public TransaccionResponseDTO procesarTransaccionIso(MensajeISO iso) {
         UUID idInstruccion = UUID.fromString(iso.getBody().getInstructionId());
@@ -71,6 +69,9 @@ public class TransaccionService {
         String fingerprint = idInstruccion.toString() + monto.toString() + moneda + bicOrigen + bicDestino
                 + creationDateTime + cuentaOrigen + cuentaDestino;
         String fingerprintMd5 = generarMD5(fingerprint);
+
+        // Seguridad Delegada a Infraestructura (AWS/PaaS)
+        // Validaciones de negocio específicas delegadas a receptores.
 
         log.info(">>> Iniciando Tx ISO: InstID={} MsgID={} Monto={}", idInstruccion, messageId, monto);
 
@@ -135,13 +136,13 @@ public class TransaccionService {
         tx.setCodigoBicOrigen(bicOrigen);
         tx.setCodigoBicDestino(bicDestino);
         tx.setEstado("RECEIVED");
-        tx.setFechaCreacion(LocalDateTime.now());
+        tx.setFechaCreacion(LocalDateTime.now(java.time.ZoneOffset.UTC));
 
         tx = transaccionRepository.save(tx);
 
         try {
-            validarBanco(bicOrigen);
-            InstitucionDTO bancoDestinoInfo = validarBanco(bicDestino);
+            validarBanco(bicOrigen, false); // Origen NO puede ser SOLO_RECIBIR
+            InstitucionDTO bancoDestinoInfo = validarBanco(bicDestino, true); // Destino SI puede ser SOLO_RECIBIR
 
             log.info("Ledger: Debitando {} a {}", monto, bicOrigen);
             registrarMovimientoContable(bicOrigen, idInstruccion, monto, "DEBIT");
@@ -149,7 +150,7 @@ public class TransaccionService {
             log.info("Ledger: Acreditando {} a {}", monto, bicDestino);
             registrarMovimientoContable(bicDestino, idInstruccion, monto, "CREDIT");
 
-            log.info("Clearing: Registrando posiciones en Ciclo {}", CICLO_ACTUAL_ID);
+            log.info("Clearing: Registrando posiciones en Ciclo ABIERTO (Auto)");
             notificarCompensacion(bicOrigen, monto, true);
             notificarCompensacion(bicDestino, monto, false);
 
@@ -194,11 +195,10 @@ public class TransaccionService {
                     throw new BusinessException("Banco Destino rechazó la transacción: " + e.getStatusCode());
 
                 } catch (org.springframework.web.client.HttpServerErrorException e) {
-                    // RNF-AVA-02: Error HTTP 5xx → Reportar fallo
+                    // RF-01: Si responde 4xx/5xx -> rechazo definitivo.
                     log.error("Error 5xx del Banco Destino: {}", e.getStatusCode());
-                    fallosConsecutivos++;
                     reportarFalloAlDirectorio(bicDestino, "HTTP_5XX");
-                    ultimoError = "HTTP 5xx: " + e.getStatusCode();
+                    throw new BusinessException("Banco Destino falló internamente (5xx): " + e.getStatusCode());
 
                 } catch (org.springframework.web.client.ResourceAccessException e) {
                     // RNF-AVA-02: Timeout o fallo de conexión TCP/TLS
@@ -258,12 +258,12 @@ public class TransaccionService {
         if ("PENDING".equals(tx.getEstado()) || "RECEIVED".equals(tx.getEstado()) || "TIMEOUT".equals(tx.getEstado())) {
 
             if (tx.getFechaCreacion() != null &&
-                    tx.getFechaCreacion().plusSeconds(5).isBefore(LocalDateTime.now())) {
+                    tx.getFechaCreacion().plusSeconds(5).isBefore(LocalDateTime.now(java.time.ZoneOffset.UTC))) {
 
                 log.info("RF-04: Transacción {} en estado incierto. Iniciando SONDING al Banco Destino...", id);
 
                 try {
-                    InstitucionDTO bancoDestino = validarBanco(tx.getCodigoBicDestino());
+                    InstitucionDTO bancoDestino = validarBanco(tx.getCodigoBicDestino(), true);
                     String urlConsulta = bancoDestino.getUrlDestino() + "/status/" + id;
 
                     try {
@@ -284,7 +284,8 @@ public class TransaccionService {
                         }
                     } catch (Exception e2) {
                         log.warn("RF-04: Falló el sondeo al banco destino: {}", e2.getMessage());
-                        if (tx.getFechaCreacion().plusSeconds(60).isBefore(LocalDateTime.now())) {
+                        if (tx.getFechaCreacion().plusSeconds(60)
+                                .isBefore(LocalDateTime.now(java.time.ZoneOffset.UTC))) {
                             log.error("RF-04: Tiempo máximo de resolución agotado (60s). Marcando FAILED.");
                             tx.setEstado("FAILED");
                             tx = transaccionRepository.save(tx);
@@ -407,7 +408,7 @@ public class TransaccionService {
         transaccionRepository.save(originalTx);
 
         // 3. Ajustar COMPENSACION (Neteo Inverso)
-        log.info("Compensación: Registrando reverso en ciclo {}", CICLO_ACTUAL_ID);
+        log.info("Compensación: Registrando reverso en ciclo ABIERTO");
         try {
             notificarCompensacion(originalTx.getCodigoBicOrigen(), originalTx.getMonto(), false);
             notificarCompensacion(originalTx.getCodigoBicDestino(), originalTx.getMonto(), true);
@@ -417,7 +418,8 @@ public class TransaccionService {
 
         // 4. Notificar al Banco Origen (El que envio el dinero originalmente)
         try {
-            InstitucionDTO bancoOrigen = validarBanco(originalTx.getCodigoBicOrigen());
+            InstitucionDTO bancoOrigen = validarBanco(originalTx.getCodigoBicOrigen(), true); // Al devolver, Origen es
+                                                                                              // "Destino" del reembolso
             String urlWebhook = bancoOrigen.getUrlDestino() + "/api/incoming/return";
 
             restTemplate.postForEntity(urlWebhook, returnRequest, String.class);
@@ -429,30 +431,35 @@ public class TransaccionService {
         return responseLedger;
     }
 
-    private InstitucionDTO validarBanco(String bic) {
+    private InstitucionDTO validarBanco(String bic, boolean permitirSoloRecibir) {
         try {
             String url = directorioUrl + "/api/v1/instituciones/" + bic;
             InstitucionDTO banco = restTemplate.getForObject(url, InstitucionDTO.class);
 
-            // RF-01.2: Check Bank Status
-            if (banco != null && ("SUSPENDIDO".equalsIgnoreCase(banco.getEstadoOperativo())
-                    || "MANT".equalsIgnoreCase(banco.getEstadoOperativo()))) {
+            if (banco == null)
+                throw new BusinessException("Banco no encontrado: " + bic);
+
+            // 1. Estados Bloqueantes Totales (Ni envia ni recibe)
+            if ("SUSPENDIDO".equalsIgnoreCase(banco.getEstadoOperativo())
+                    || "MANT".equalsIgnoreCase(banco.getEstadoOperativo())) {
                 throw new BusinessException("El banco " + bic + " se encuentra en MANTENIMIENTO/SUSPENDIDO.");
             }
-            if (banco != null && "SOLO_RECIBIR".equalsIgnoreCase(banco.getEstadoOperativo())) {
-                // If pure lookup for sending, maybe ok? But if originating...
-                // RF-02 says "Drenado" (Solo recibir) -> Rejects transactions directed TO it?
-                // Or FROM it?
-                // Usually "Solo Recibir" means it can receive credits but maybe not initiate?
-                // RF-02 says: "rechaza transacciones dirigidas a él instantáneamente".
-                // So if we are validating destination...
-                // Context-dependent check might be needed, but for now we throw if suspended.
+
+            // 2. Estado Drenado (Solo Recibir)
+            // Si es Origen (permitirSoloRecibir = false), NO puede opera.
+            // Si es Destino (permitirSoloRecibir = true), SI puede operar.
+            if ("SOLO_RECIBIR".equalsIgnoreCase(banco.getEstadoOperativo()) && !permitirSoloRecibir) {
+                throw new BusinessException(
+                        "El banco " + bic + " está en modo SOLO_RECIBIR y no puede iniciar transferencias.");
             }
+
             return banco;
         } catch (HttpClientErrorException.NotFound e) {
-            throw new BusinessException("El banco " + bic + " no existe o no está operativo.");
+            throw new BusinessException("El banco " + bic + " no existe.");
         } catch (Exception e) {
-            throw new BusinessException("Error de comunicación con Directorio (" + bic + "): " + e.getMessage());
+            if (e instanceof BusinessException)
+                throw (BusinessException) e;
+            throw new BusinessException("Error validando banco " + bic + ": " + e.getMessage());
         }
     }
 
@@ -477,8 +484,8 @@ public class TransaccionService {
 
     private void notificarCompensacion(String bic, BigDecimal monto, boolean esDebito) {
         try {
-            String url = String.format("%s/api/v1/compensacion/ciclos/%d/acumular?bic=%s&monto=%s&esDebito=%s",
-                    compensacionUrl, CICLO_ACTUAL_ID, bic, monto.toString(), esDebito);
+            String url = String.format("%s/api/v1/compensacion/acumular?bic=%s&monto=%s&esDebito=%s",
+                    compensacionUrl, bic, monto.toString(), esDebito);
 
             restTemplate.postForEntity(url, null, Void.class);
 
@@ -491,7 +498,7 @@ public class TransaccionService {
         RespaldoIdempotencia respaldo = new RespaldoIdempotencia();
         respaldo.setHashContenido("HASH_" + tx.getIdInstruccion());
         respaldo.setCuerpoRespuesta("{ \"estado\": \"" + resultado + "\" }");
-        respaldo.setFechaExpiracion(LocalDateTime.now().plusDays(1));
+        respaldo.setFechaExpiracion(LocalDateTime.now(java.time.ZoneOffset.UTC).plusDays(1));
         respaldo.setTransaccion(tx);
         idempotenciaRepository.save(respaldo);
     }
@@ -570,7 +577,7 @@ public class TransaccionService {
     }
 
     public java.util.Map<String, Object> obtenerEstadisticas() {
-        LocalDateTime start = LocalDateTime.now().minusHours(24);
+        LocalDateTime start = LocalDateTime.now(java.time.ZoneOffset.UTC).minusHours(24);
 
         long total = transaccionRepository.countTransaccionesDesde(start);
         BigDecimal volumen = transaccionRepository.sumMontoExitosoDesde(start);
@@ -639,4 +646,5 @@ public class TransaccionService {
             throw new RuntimeException("Error generando MD5", e);
         }
     }
+
 }

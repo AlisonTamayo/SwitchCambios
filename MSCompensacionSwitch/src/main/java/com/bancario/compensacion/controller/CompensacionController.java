@@ -36,7 +36,7 @@ public class CompensacionController {
     }
 
     @PostMapping("/ciclos/{cicloId}/acumular")
-    @Operation(summary = "INTERNAL: Acumular movimiento", description = "Endpoint de alta velocidad usado por el Núcleo para registrar débitos/créditos en tiempo real.")
+    @Operation(summary = "INTERNAL: Acumular movimiento (Deprecated)", description = "Use el endpoint sin ID para autodetectar ciclo.")
     public ResponseEntity<Void> acumular(
             @PathVariable Integer cicloId,
             @RequestParam String bic,
@@ -44,6 +44,17 @@ public class CompensacionController {
             @RequestParam boolean esDebito) {
 
         service.acumularTransaccion(cicloId, bic, monto, esDebito);
+        return ResponseEntity.ok().build();
+    }
+
+    @PostMapping("/acumular")
+    @Operation(summary = "INTERNAL: Acumular movimiento (Auto-Ciclo)", description = "Registra débitos/créditos en el ciclo ABIERTO actual.")
+    public ResponseEntity<Void> acumularAuto(
+            @RequestParam String bic,
+            @RequestParam BigDecimal monto,
+            @RequestParam boolean esDebito) {
+
+        service.acumularEnCicloAbierto(bic, monto, esDebito);
         return ResponseEntity.ok().build();
     }
 

@@ -6,4 +6,5 @@ import org.springframework.stereotype.Repository;
 
 @Repository
 public interface CicloCompensacionRepository extends JpaRepository<CicloCompensacion, Integer> {
+    java.util.List<CicloCompensacion> findByEstado(String estado);
 }

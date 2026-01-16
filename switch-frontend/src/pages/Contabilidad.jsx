@@ -43,7 +43,7 @@ export default function Contabilidad() {
                     // In Bancos.jsx we used `contabilidadApi.post('/cuentas'...)`.
                     // So let's stick to `/cuentas/${bic}` 
 
-                    const res = await contabilidadApi.get(`/cuentas/${bic}`);
+                    const res = await contabilidadApi.get(`/ledger/cuentas/${bic}`);
                     return { ...bank, codigoBic: bic, cuenta: res.data, hasAccount: true };
                 } catch (err) {
                     return { ...bank, codigoBic: bic, cuenta: null, hasAccount: false };
@@ -62,7 +62,7 @@ export default function Contabilidad() {
 
     const handleCreateAccount = async (bic) => {
         try {
-            await contabilidadApi.post('/cuentas', { codigoBic: bic });
+            await contabilidadApi.post('/ledger/cuentas', { codigoBic: bic });
             alert("Cuenta técnica creada exitosamente.");
             loadData();
         } catch (error) {
@@ -75,7 +75,7 @@ export default function Contabilidad() {
         if (!amount) return;
 
         try {
-            await contabilidadApi.post('/movimientos', {
+            await contabilidadApi.post('/ledger/movimientos', {
                 codigoBic: bic,
                 tipo: 'CREDIT',
                 monto: parseFloat(amount),

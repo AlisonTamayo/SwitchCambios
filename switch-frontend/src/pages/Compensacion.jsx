@@ -14,7 +14,7 @@ export default function Compensacion() {
 
     const loadData = async () => {
         try {
-            const res = await compensacionApi.get('/ciclos');
+            const res = await compensacionApi.get('/compensacion/ciclos');
             const lista = res.data;
             setCiclos(lista);
 
@@ -33,7 +33,7 @@ export default function Compensacion() {
 
     const loadPosiciones = async (cicloId) => {
         try {
-            const res = await compensacionApi.get(`/ciclos/${cicloId}/posiciones`);
+            const res = await compensacionApi.get(`/compensacion/ciclos/${cicloId}/posiciones`);
             setPosiciones(res.data);
         } catch (error) {
             console.error("Error cargando posiciones:", error);
@@ -45,7 +45,7 @@ export default function Compensacion() {
         if (!window.confirm("¿Confirmar CIERRE DE CICLO? Esto generará el archivo de liquidación y abrirá un nuevo ciclo.")) return;
 
         try {
-            await compensacionApi.post(`/ciclos/${cicloActivo.id}/cierre`);
+            await compensacionApi.post(`/compensacion/ciclos/${cicloActivo.id}/cierre`);
             alert("Ciclo cerrado exitosamente. Nuevo ciclo iniciado.");
             window.location.reload();
         } catch (error) {
@@ -153,7 +153,10 @@ export default function Compensacion() {
                                 </td>
                                 <td className="px-6 py-4 text-right">
                                     {c.estado === 'CERRADO' && (
-                                        <button className="text-indigo-600 hover:text-indigo-900 flex items-center justify-end gap-1 ml-auto">
+                                        <button
+                                            onClick={() => window.open(`http://localhost:8084/api/v1/compensacion/ciclos/${c.id}/xml`, '_blank')}
+                                            className="text-indigo-600 hover:text-indigo-900 flex items-center justify-end gap-1 ml-auto"
+                                        >
                                             <ArrowDownCircle size={16} /> XML
                                         </button>
                                     )}

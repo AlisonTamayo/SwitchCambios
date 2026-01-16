@@ -166,7 +166,7 @@ public class DirectorioService {
                 Institucion.Estado estadoEnum = Institucion.Estado.valueOf(nuevoEstado.toUpperCase());
                 inst.setEstadoOperativo(estadoEnum.name());
             } catch (IllegalArgumentException e) {
-                throw new RuntimeException("Estado inválido. Use: ONLINE, OFFLINE o MANT");
+                throw new RuntimeException("Estado inválido. Use: ONLINE, OFFLINE, MANT, SUSPENDIDO o SOLO_RECIBIR");
             }
         }
 

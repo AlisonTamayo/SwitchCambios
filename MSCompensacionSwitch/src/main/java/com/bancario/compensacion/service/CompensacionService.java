@@ -37,6 +37,15 @@ public class CompensacionService {
         posicionRepo.save(posicion);
     }
 
+    @Transactional
+    public void acumularEnCicloAbierto(String bic, BigDecimal monto, boolean esDebito) {
+        CicloCompensacion cicloAbierto = cicloRepo.findByEstado("ABIERTO")
+                .stream().findFirst()
+                .orElseThrow(() -> new RuntimeException("No hay ciclo abierto para compensar"));
+
+        acumularTransaccion(cicloAbierto.getId(), bic, monto, esDebito);
+    }
+
     private PosicionInstitucion crearPosicionVacia(Integer cicloId, String bic) {
         PosicionInstitucion p = new PosicionInstitucion();
         p.setCiclo(cicloRepo.getReferenceById(cicloId));
@@ -80,11 +89,11 @@ public class CompensacionService {
         archivo.setFirmaJws(firma);
         archivo.setCanalEnvio("BCE_DIRECT_LINK");
         archivo.setEstado("ENVIADO");
-        archivo.setFechaGeneracion(LocalDateTime.now());
+        archivo.setFechaGeneracion(LocalDateTime.now(java.time.ZoneOffset.UTC));
         archivo = archivoRepo.save(archivo);
 
         cicloActual.setEstado("CERRADO");
-        cicloActual.setFechaCierre(LocalDateTime.now());
+        cicloActual.setFechaCierre(LocalDateTime.now(java.time.ZoneOffset.UTC));
         cicloRepo.save(cicloActual);
 
         iniciarSiguienteCiclo(cicloActual, posiciones);
@@ -97,7 +106,7 @@ public class CompensacionService {
         nuevo.setNumeroCiclo(anterior.getNumeroCiclo() + 1);
         nuevo.setDescripcion("Ciclo Automático");
         nuevo.setEstado("ABIERTO");
-        nuevo.setFechaApertura(LocalDateTime.now());
+        nuevo.setFechaApertura(LocalDateTime.now(java.time.ZoneOffset.UTC));
         CicloCompensacion guardado = cicloRepo.save(nuevo);
 
         for (PosicionInstitucion posAnt : saldosAnteriores) {
@@ -105,7 +114,10 @@ public class CompensacionService {
             posNueva.setCiclo(guardado);
             posNueva.setCodigoBic(posAnt.getCodigoBic());
 
-            posNueva.setSaldoInicial(posAnt.getNeto());
+            // FIXED: En un sistema de compensación diario, el saldo inicial debe ser CERO
+            // tras liquidar.
+            // Si arrastramos el neto, nunca se liquida la deuda.
+            posNueva.setSaldoInicial(BigDecimal.ZERO);
 
             posNueva.setTotalDebitos(BigDecimal.ZERO);
             posNueva.setTotalCreditos(BigDecimal.ZERO);
@@ -125,7 +137,7 @@ public class CompensacionService {
         sb.append("  <Header>\n");
         sb.append("    <MsgId>MSG-LIQ-").append(System.currentTimeMillis()).append("</MsgId>\n");
         sb.append("    <CycleId>").append(ciclo.getNumeroCiclo()).append("</CycleId>\n");
-        sb.append("    <CreationDate>").append(LocalDateTime.now()).append("</CreationDate>\n");
+        sb.append("    <CreationDate>").append(LocalDateTime.now(java.time.ZoneOffset.UTC)).append("</CreationDate>\n");
         sb.append("    <TotalRecords>").append(posiciones.size()).append("</TotalRecords>\n");
         sb.append("  </Header>\n");
 
@@ -151,7 +163,7 @@ public class CompensacionService {
             primerCiclo.setNumeroCiclo(1);
             primerCiclo.setDescripcion("Ciclo Inicial");
             primerCiclo.setEstado("ABIERTO");
-            primerCiclo.setFechaApertura(LocalDateTime.now());
+            primerCiclo.setFechaApertura(LocalDateTime.now(java.time.ZoneOffset.UTC));
             cicloRepo.save(primerCiclo);
             ciclos.add(primerCiclo);
         }

@@ -85,14 +85,3 @@ consumers:
       - key: BANTEC_SECRET_KEY_2025
 
 
-# ==========================================
-# PLUGINS GLOBALES (AL FINAL DEL ARCHIVO)
-# ==========================================
-plugins:
-  - name: prometheus
-    config:
-      per_consumer: true       # ¡VITAL! Desglosa por banco
-      status_code_metrics: true # ¡VITAL! Cuenta los 200/500
-      latency_metrics: true     # ¡VITAL! Mide tiempos
-      bandwidth_metrics: true
-      upstream_health_metrics: true

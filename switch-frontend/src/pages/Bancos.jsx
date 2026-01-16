@@ -29,9 +29,8 @@ export default function Bancos() {
         }
     };
 
-    const handleToggleStatus = async (bic, currentStatus) => {
-        const newStatus = currentStatus === 'ONLINE' ? 'OFFLINE' : 'ONLINE';
-        if (!window.confirm(`¿Seguro que desea cambiar el estado de ${bic} a ${newStatus}?`)) return;
+    const handleStatusChange = async (bic, newStatus) => {
+        if (!window.confirm(`¿Cambiar estado de ${bic} a ${newStatus}?`)) return;
 
         try {
             await directorioApi.patch(`/instituciones/${bic}/operaciones?nuevoEstado=${newStatus}`);
@@ -59,7 +58,7 @@ export default function Bancos() {
 
             // 2. Create Technical Account in Ledger (Postgres)
             try {
-                await contabilidadApi.post('/cuentas', { codigoBic: formData.codigoBic });
+                await contabilidadApi.post('/ledger/cuentas', { codigoBic: formData.codigoBic });
             } catch (ledgerError) {
                 console.warn("Ledger account creation failed (maybe exists?):", ledgerError);
             }
@@ -139,16 +138,20 @@ export default function Bancos() {
                                         </span>
                                     </td>
                                     <td className="px-6 py-4 text-right">
-                                        <button
-                                            onClick={() => handleToggleStatus(bic, bank.estadoOperativo)}
-                                            className={`p-2 rounded-lg transition-colors ${bank.estadoOperativo === 'ONLINE'
-                                                ? 'text-red-600 hover:bg-red-50'
-                                                : 'text-green-600 hover:bg-green-50'
+                                        <select
+                                            value={bank.estadoOperativo}
+                                            onChange={(e) => handleStatusChange(bic, e.target.value)}
+                                            className={`text-xs font-medium border-0 rounded-md py-1.5 pl-2 pr-8 ring-1 ring-inset focus:ring-2 sm:text-sm sm:leading-6 ${bank.estadoOperativo === 'ONLINE' ? 'text-green-700 bg-green-50 ring-green-600/20' :
+                                                bank.estadoOperativo === 'SOLO_RECIBIR' ? 'text-blue-700 bg-blue-50 ring-blue-600/20' :
+                                                    'text-red-700 bg-red-50 ring-red-600/20'
                                                 }`}
-                                            title={bank.estadoOperativo === 'ONLINE' ? 'Desconectar' : 'Conectar'}
                                         >
-                                            <Power size={18} />
-                                        </button>
+                                            <option value="ONLINE">ONLINE</option>
+                                            <option value="OFFLINE">OFFLINE</option>
+                                            <option value="SUSPENDIDO">SUSPENDIDO</option>
+                                            <option value="MANT">MANTENIMIENTO</option>
+                                            <option value="SOLO_RECIBIR">SOLO RECIBIR</option>
+                                        </select>
                                     </td>
                                 </tr>
                             );
