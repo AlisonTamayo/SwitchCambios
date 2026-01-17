@@ -15,5 +15,5 @@ public class RegistroMovimientoRequest {
     private String codigoBic;
     private UUID idInstruccion;
     private BigDecimal monto;
-    private String tipo; // "CREDIT" o "DEBIT"
+    private String tipo;
 }

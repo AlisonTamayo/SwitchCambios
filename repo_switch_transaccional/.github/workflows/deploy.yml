@@ -1,0 +1,63 @@
+name: Deploy to Google Cloud VM
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Orchestrator
+      uses: actions/checkout@v3
+
+    - name: Deploy to VM via SSH
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.GCP_VM_HOST }}
+        username: ${{ secrets.GCP_VM_USERNAME }}
+        key: ${{ secrets.GCP_VM_SSH_KEY }}
+        script: |
+          echo "🚀 Iniciando despliegue automatizado en GCP..."
+          
+          # 1. Navegar a la carpeta raíz de proyectos
+          cd /opt/switch
+          
+          # 2. Actualizar Orquestador (donde está el docker-compose)
+          echo "📥 Actualizando switch-transaccional..."
+          git -C switch-transaccional pull origin main
+          
+          # 3. Actualizar Microservicios (Git Pull en bucle o explícito)
+          # Asumimos que ya están clonados. Si no, habría que clonarlos la primera vez manualmente.
+          
+          echo "📥 Actualizando ms-nucleo..."
+          git -C ms-nucleo pull origin main
+          
+          echo "📥 Actualizando ms-directorio..."
+          git -C ms-directorio pull origin main
+          
+          echo "📥 Actualizando ms-contabilidad..."
+          git -C ms-contabilidad pull origin main
+          
+          echo "📥 Actualizando ms-compensacion..."
+          git -C ms-compensacion pull origin main
+          
+          echo "📥 Actualizando ms-devolucion..."
+          git -C ms-devolucion pull origin main
+          
+          echo "📥 Actualizando switch-frontend..."
+          git -C switch-frontend pull origin main
+          
+          # 4. Reconstruir y Levantar Contenedores
+          echo "🐳 Reconstruyendo contenedores con Docker Compose..."
+          # Usamos el archivo del orquestador, pero los contextos están en ../ (funciona porque cd está en /opt/switch)
+          
+          # IMPORTANTE: docker-compose busca paths relativos al archivo yml.
+          # Si ejecutamos: docker-compose -f switch-transaccional/docker-compose-full.yml
+          # El contexto "../ms-nucleo" se resuelve relativo a "switch-transaccional/", o sea: "switch-transaccional/../ms-nucleo" -> "ms-nucleo".
+          # ESTO ES CORRECTO.
+          
+          docker-compose -f switch-transaccional/docker-compose-full.yml up -d --build --remove-orphans
+          
+          echo "✅ Despliegue completado exitosamente."

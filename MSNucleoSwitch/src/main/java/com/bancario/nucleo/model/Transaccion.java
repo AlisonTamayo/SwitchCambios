@@ -11,10 +11,9 @@ import java.util.UUID;
 @Getter
 @Setter
 @Entity
-@Table(name = "Transaccion") // CamelCase según solicitud
+@Table(name = "Transaccion")
 public class Transaccion {
 
-    // usar CamelCase
     @Id
     @Column(name = "idInstruccion")
     private UUID idInstruccion;
@@ -38,7 +37,7 @@ public class Transaccion {
     private String codigoBicDestino;
 
     @Column(name = "estado", length = 20, nullable = false)
-    private String estado; // RECEIVED, ROUTED, COMPLETED, FAILED, TIMEOUT
+    private String estado;
 
     @Column(name = "fechaCreacion")
     private LocalDateTime fechaCreacion;

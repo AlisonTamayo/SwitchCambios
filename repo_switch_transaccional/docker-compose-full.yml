@@ -1,0 +1,246 @@
+services:
+  # ==========================================
+  # 1. TUS MICROSERVICIOS (Java + Postgres)
+  # ==========================================
+  directorio-db:
+    image: mongo:latest
+    environment:
+
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=admin
+    ports: [ "27017:27017" ]
+    healthcheck:
+      test: [ "CMD-SHELL", "mongosh", "--eval", "db.adminCommand('ping')" ]
+      interval: 5s
+      retries: 5
+  redis-switch:
+    image: redis:7-alpine
+    container_name: redis-switch
+    ports: [ "6379:6379" ]
+    command: redis-server --save 60 1 --loglevel warning
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      retries: 5
+  ms-directorio:
+    build:
+      context: ../ms-directorio
+      dockerfile: Dockerfile
+    container_name: ms-directorio
+    ports: [ "8081:8081" ]
+    environment:
+      - SERVER_PORT=8081
+      - SPRING_DATA_MONGODB_URI=mongodb://admin:admin@directorio-db:27017/directorio_db?authSource=admin
+      - SPRING_DATA_REDIS_HOST=redis-switch
+      - SPRING_DATA_REDIS_PORT=6379
+      - TZ=UTC
+    depends_on:
+      directorio-db:
+        condition: service_healthy
+      redis-switch:
+        condition: service_healthy
+
+  # ==========================================
+  # 2. MS NÚCLEO / SWITCH (Puerto 8082)
+  # ==========================================
+
+  nucleo-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: nucleo_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: admin
+    ports: [ "5434:5432" ]
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 5s
+      retries: 5
+
+  ms-nucleo:
+    build:
+      context: ../ms-nucleo
+      dockerfile: Dockerfile
+    container_name: ms-nucleo
+    ports: [ "8082:8082" ]
+    environment:
+      - SERVER_PORT=8082
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://nucleo-db:5432/nucleo_db
+      - SPRING_DATASOURCE_USERNAME=postgres
+      - SPRING_DATASOURCE_PASSWORD=admin
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=update
+      - URL_DIRECTORIO=http://ms-directorio:8081
+      - URL_CONTABILIDAD=http://ms-contabilidad:8083
+    depends_on:
+      nucleo-db:
+        condition: service_healthy
+      ms-directorio:
+        condition: service_started
+
+  contabilidad-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: contabilidad_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: admin
+    ports: [ "5435:5432" ]
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 5s
+      retries: 5
+
+  # ==========================================
+  # 3. MS CONTABILIDAD (Puerto 8083)
+  # ==========================================
+
+  ms-contabilidad:
+    build:
+      context: ../ms-contabilidad
+      dockerfile: Dockerfile
+    container_name: ms-contabilidad
+    ports: [ "8083:8083" ]
+    environment:
+      - SERVER_PORT=8083
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://contabilidad-db:5432/contabilidad_db
+      - SPRING_DATASOURCE_USERNAME=postgres
+      - SPRING_DATASOURCE_PASSWORD=admin
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=update
+    depends_on:
+      contabilidad-db:
+        condition: service_healthy
+
+  compensacion-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: compensacion_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: admin
+    ports: [ "5436:5432" ]
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 5s
+      retries: 5
+
+  # ==========================================
+  # 4. MS COMPENSACIÓN (Puerto 8084)
+  # ==========================================
+
+  ms-compensacion:
+    build:
+      context: ../ms-compensacion
+      dockerfile: Dockerfile
+    container_name: ms-compensacion
+    ports: [ "8084:8084" ]
+    environment:
+      - SERVER_PORT=8084
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://compensacion-db:5432/compensacion_db
+      - SPRING_DATASOURCE_USERNAME=postgres
+      - SPRING_DATASOURCE_PASSWORD=admin
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=update
+    depends_on:
+      compensacion-db:
+        condition: service_healthy
+
+  devolucion-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: devolucion
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: admin
+    ports: [ "5437:5432" ]
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres -d devolucion" ]
+      interval: 5s
+      retries: 5
+
+  # ==========================================
+  # 5. MS DEVOLUCIONES (Puerto 8085)
+  # ==========================================
+
+  ms-devolucion:
+    build:
+      context: ../ms-devolucion
+      dockerfile: Dockerfile
+    container_name: ms-devolucion
+    ports: [ "8085:8085" ]
+    environment:
+      - SERVER_PORT=8085
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://devolucion-db:5432/devolucion
+      - SPRING_DATASOURCE_USERNAME=postgres
+      - SPRING_DATASOURCE_PASSWORD=admin
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=update
+    depends_on:
+      devolucion-db:
+        condition: service_healthy
+
+  # ==========================================
+  # 6. KONG API GATEWAY (CORREGIDO)
+  # ==========================================
+  kong:
+    image: kong:3.4
+    container_name: kong-gateway
+    restart: always
+    volumes:
+      - ./kong.yml:/usr/local/kong/declarative/kong.yml
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /usr/local/kong/declarative/kong.yml
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_LISTEN: 0.0.0.0:8000
+      KONG_ADMIN_LISTEN: 0.0.0.0:8001
+      KONG_STATUS_LISTEN: 0.0.0.0:8100
+
+      # --- CONFIGURACIÓN DEL PANEL (FIX VISUAL) ---
+      KONG_ADMIN_GUI_LISTEN: 0.0.0.0:8002
+      # Esta URL le dice al panel dónde buscar los datos (CORS FIX)
+      # IMPORTANTE: Asegúrate que esta IP es accesible desde tu navegador
+      KONG_ADMIN_GUI_API_URL: http://3.140.230.212:8001
+
+      KONG_PLUGINS: bundled,prometheus,cors,key-auth
+
+    ports:
+      - "8000:8000"
+      - "8001:8001"
+      - "8002:8002"
+      - "8100:8100"
+    depends_on:
+      ms-nucleo:
+        condition: service_started
+
+  # ==========================================
+  # 8. NGINX PROXY MANAGER
+  # ==========================================
+  npm:
+    image: 'jc21/nginx-proxy-manager:latest'
+    container_name: switch-npm
+    restart: always
+    ports:
+      - '80:80'
+      - '443:443'
+      - '81:81'
+    environment:
+      DISABLE_IPV6: 'true'
+    volumes:
+      - ./npm_data:/data
+      - ./npm_letsencrypt:/etc/letsencrypt
+    depends_on:
+      - kong
+    networks:
+      - default
+
+  # ==========================================
+  # 9. FRONTEND (React + Vite)
+  # ==========================================
+  switch-frontend:
+    build:
+      context: ../switch-frontend
+      dockerfile: Dockerfile
+    container_name: switch-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - ms-nucleo
+      - ms-contabilidad
+      - ms-compensacion
+    networks:
+      - default

@@ -10,7 +10,7 @@ import java.math.BigDecimal;
 @Table(name = "posicioninstitucion")
 @Getter
 @Setter
-@JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "ciclo"})
+@JsonIgnoreProperties({ "hibernateLazyInitializer", "handler", "ciclo" })
 public class PosicionInstitucion {
 
     @Id
@@ -27,22 +27,20 @@ public class PosicionInstitucion {
     @Column(name = "codigo_bic", length = 20)
     private String codigoBic;
 
-    // --- REQUISITO CONTINUIDAD ---
     @Column(name = "saldo_inicial", precision = 20, scale = 2)
     private BigDecimal saldoInicial = BigDecimal.ZERO;
 
-    // --- REQUISITO NETEO MULTILATERAL ---
     @Column(name = "total_debitos", precision = 20, scale = 2)
-    private BigDecimal totalDebitos = BigDecimal.ZERO; 
+    private BigDecimal totalDebitos = BigDecimal.ZERO;
 
     @Column(name = "total_creditos", precision = 20, scale = 2)
-    private BigDecimal totalCreditos = BigDecimal.ZERO; 
+    private BigDecimal totalCreditos = BigDecimal.ZERO;
 
     @Column(name = "neto", precision = 20, scale = 2)
     private BigDecimal neto = BigDecimal.ZERO;
 
     public void recalcularNeto() {
-        
+
         this.neto = this.saldoInicial.add(this.totalCreditos).subtract(this.totalDebitos);
     }
 }

@@ -1,11 +1,14 @@
 import axios from 'axios';
 
-const API_URL = 'http://localhost';
+// En Producción (Docker/AWS), usamos Nginx como Proxy, así que la URL es relativa '/api'.
+// En desarrollo local (npm run dev), Vite puede necesitar proxy o apuntar directo a Kong.
+const API_URL = import.meta.env.VITE_API_URL || '/api';
 
-export const nucleoApi = axios.create({ baseURL: `${API_URL}:8082/api/v1` });
-export const directorioApi = axios.create({ baseURL: `${API_URL}:8081/api/v1` });
-export const contabilidadApi = axios.create({ baseURL: `${API_URL}:8083/api/v1` });
-export const compensacionApi = axios.create({ baseURL: `${API_URL}:8084/api/v1` });
+// Todas las peticiones pasan por el Proxy Nginx -> Kong -> Microservicios
+export const nucleoApi = axios.create({ baseURL: `${API_URL}/transacciones` });
+export const directorioApi = axios.create({ baseURL: `${API_URL}/directorio` });
+export const contabilidadApi = axios.create({ baseURL: `${API_URL}/contabilidad` });
+export const compensacionApi = axios.create({ baseURL: `${API_URL}/compensacion` });
 
 
 [nucleoApi, directorioApi, contabilidadApi, compensacionApi].forEach(api => {

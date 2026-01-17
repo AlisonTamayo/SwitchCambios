@@ -17,12 +17,11 @@ export default function Layout() {
         { name: 'Bancos', href: '/bancos', icon: Building2 },
         { name: 'Transacciones', href: '/transacciones', icon: Activity },
         { name: 'Contabilidad', href: '/contabilidad', icon: BookOpen },
-        { name: 'Compensación', href: '/compensacion', icon: Activity }, // Recycling icon or import a new one like Scale
+        { name: 'Compensación', href: '/compensacion', icon: Activity },
     ];
 
     return (
         <div className="min-h-screen bg-gray-50 flex">
-            {/* Sidebar */}
             <aside
                 className={cn(
                     "fixed inset-y-0 left-0 z-50 w-64 bg-white border-r border-gray-200 transition-transform duration-300 ease-in-out transform",
@@ -59,9 +58,7 @@ export default function Layout() {
                 </nav>
             </aside>
 
-            {/* Main Content */}
             <div className="flex-1 flex flex-col min-w-0">
-                {/* Header */}
                 <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-4 lg:px-8">
                     <button
                         onClick={() => setSidebarOpen(true)}
@@ -81,7 +78,6 @@ export default function Layout() {
                     </div>
                 </header>
 
-                {/* Page Content */}
                 <main className="flex-1 p-4 lg:p-8 overflow-auto">
                     <div className="max-w-7xl mx-auto">
                         <Outlet />

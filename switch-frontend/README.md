@@ -1,16 +1,58 @@
-# React + Vite
+# Frontend - Switch Transaccional (React + Vite) v3.0
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Este repositorio contiene la interfaz de usuario para el monitoreo y gestión del Switch Transaccional Interbancario.
 
-Currently, two official plugins are available:
+## 🚀 Arquitectura Frontend
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+*   **Framework:** React 18 + Vite (Alto rendimiento)
+*   **Estilos:** TailwindCSS + Lucide Icons
+*   **Conexión:** Consume la API Gateway (Kong) en el puerto `8000`.
 
-## React Compiler
+## 🌐 Configuración de Despliegue (Nginx & CORS)
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Para producción en AWS, utilizamos **Nginx** como Proxy Inverso. Esto resuelve dos problemas críticos:
+1.  **Single Page Application (SPA):** Redirige todas las rutas desconocidas a `index.html` para que React Router funcione.
+2.  **CORS (Cross-Origin Resource Sharing):** Al usar `/api` como proxy, el navegador ve que las peticiones van al "mismo origen" (mismo dominio), eliminando bloqueos de seguridad.
 
-## Expanding the ESLint configuration
+### `nginx.conf` (Producción)
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+```nginx
+server {
+    listen 80;
+    
+    # 1. Servir los archivos estáticos de React
+    location / {
+        root /usr/share/nginx/html;
+        index index.html index.htm;
+        # Fix para React Router: Si no encuentra el archivo, devuelve index.html
+        try_files $uri $uri/ /index.html;
+    }
+
+    # 2. Proxy Inverso hacia Kong (API Gateway)
+    # Ejemplo: Petición a /api/transacciones -> Se envía a http://kong:8000/transacciones
+    location /api/ {
+        # Reescribimos la URL para quitar '/api' si Kong no lo espera, 
+        # o lo dejamos si configuramos Kong con '/api' en upstream.
+        # En nuestra arquitectura actual: Kong espera recibir '/transacciones'
+        # Así que reescribimos:
+        rewrite ^/api/(.*) /$1 break;
+        
+        proxy_pass http://kong-gateway:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
+## 🛠️ Comandos Locales
+
+```bash
+# Instalar dependencias
+npm install
+
+# Correr en modo desarrollo
+npm run dev
+
+# Construir para producción
+npm run build
+```

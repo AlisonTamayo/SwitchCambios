@@ -114,14 +114,11 @@ public class CompensacionService {
             posNueva.setCiclo(guardado);
             posNueva.setCodigoBic(posAnt.getCodigoBic());
 
-            // FIXED: En un sistema de compensación diario, el saldo inicial debe ser CERO
-            // tras liquidar.
-            // Si arrastramos el neto, nunca se liquida la deuda.
             posNueva.setSaldoInicial(BigDecimal.ZERO);
 
             posNueva.setTotalDebitos(BigDecimal.ZERO);
             posNueva.setTotalCreditos(BigDecimal.ZERO);
-            posNueva.recalcularNeto(); // Neto arranca igual al saldo inicial
+            posNueva.recalcularNeto();
             posicionRepo.save(posNueva);
         }
         System.out.println(">>> CICLO " + nuevo.getNumeroCiclo() + " INICIADO CORRECTAMENTE.");
