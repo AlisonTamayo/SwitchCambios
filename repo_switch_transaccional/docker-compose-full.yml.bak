@@ -24,7 +24,7 @@ services:
       retries: 5
   ms-directorio:
     build:
-      context: ./ms-directorio
+      context: ../ms-directorio
       dockerfile: Dockerfile
     container_name: ms-directorio
     ports: [ "8081:8081" ]
@@ -58,7 +58,7 @@ services:
 
   ms-nucleo:
     build:
-      context: ./MSNucleoSwitch
+      context: ../ms-nucleo
       dockerfile: Dockerfile
     container_name: ms-nucleo
     ports: [ "8082:8082" ]
@@ -94,7 +94,7 @@ services:
 
   ms-contabilidad:
     build:
-      context: ./Switch-ms-contabilidad
+      context: ../ms-contabilidad
       dockerfile: Dockerfile
     container_name: ms-contabilidad
     ports: [ "8083:8083" ]
@@ -126,7 +126,7 @@ services:
 
   ms-compensacion:
     build:
-      context: ./MSCompensacionSwitch
+      context: ../ms-compensacion
       dockerfile: Dockerfile
     container_name: ms-compensacion
     ports: [ "8084:8084" ]
@@ -158,7 +158,7 @@ services:
 
   ms-devolucion:
     build:
-      context: ./MSDevolucionSwitch
+      context: ../ms-devolucion
       dockerfile: Dockerfile
     container_name: ms-devolucion
     ports: [ "8085:8085" ]
@@ -233,7 +233,7 @@ services:
   # ==========================================
   switch-frontend:
     build:
-      context: ./switch-frontend
+      context: ../switch-frontend
       dockerfile: Dockerfile
     container_name: switch-frontend
     ports:

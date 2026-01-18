@@ -208,22 +208,21 @@ services:
         condition: service_started
 
   # ==========================================
-  # 8. NGINX PROXY MANAGER
+  # 8. CADDY (AUTOMATIC HTTPS REVERSE PROXY)
   # ==========================================
-  npm:
-    image: 'jc21/nginx-proxy-manager:latest'
-    container_name: switch-npm
+  caddy:
+    image: caddy:2-alpine
+    container_name: switch-caddy
     restart: always
     ports:
-      - '80:80'
-      - '443:443'
-      - '81:81'
-    environment:
-      DISABLE_IPV6: 'true'
+      - "80:80"
+      - "443:443"
     volumes:
-      - ./npm_data:/data
-      - ./npm_letsencrypt:/etc/letsencrypt
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
     depends_on:
+      - switch-frontend
       - kong
     networks:
       - default
@@ -244,3 +243,7 @@ services:
       - ms-compensacion
     networks:
       - default
+
+volumes:
+  caddy_data:
+  caddy_config:

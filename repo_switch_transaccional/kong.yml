@@ -105,3 +105,7 @@ consumers:
   - username: BANTEC
     keyauth_credentials:
       - key: BANTEC_SECRET_KEY_2025
+
+  - username: SWITCH_ADMIN
+    keyauth_credentials:
+      - key: SWITCH_ADMIN_SUPER_SECRET_KEY

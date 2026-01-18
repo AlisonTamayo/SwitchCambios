@@ -5,10 +5,13 @@ import axios from 'axios';
 const API_URL = import.meta.env.VITE_API_URL || '/api';
 
 // Todas las peticiones pasan por el Proxy Nginx -> Kong -> Microservicios
-export const nucleoApi = axios.create({ baseURL: `${API_URL}/transacciones` });
-export const directorioApi = axios.create({ baseURL: `${API_URL}/directorio` });
-export const contabilidadApi = axios.create({ baseURL: `${API_URL}/contabilidad` });
-export const compensacionApi = axios.create({ baseURL: `${API_URL}/compensacion` });
+// INYECTAMOS LA API KEY DE ADMIN DIRECTAMENTE PARA EVITAR ERRORES 401
+const headers = { 'apikey': 'SWITCH_ADMIN_SUPER_SECRET_KEY' };
+
+export const nucleoApi = axios.create({ baseURL: `${API_URL}/transacciones`, headers });
+export const directorioApi = axios.create({ baseURL: `${API_URL}/directorio`, headers });
+export const contabilidadApi = axios.create({ baseURL: `${API_URL}/contabilidad`, headers });
+export const compensacionApi = axios.create({ baseURL: `${API_URL}/compensacion`, headers });
 
 
 [nucleoApi, directorioApi, contabilidadApi, compensacionApi].forEach(api => {

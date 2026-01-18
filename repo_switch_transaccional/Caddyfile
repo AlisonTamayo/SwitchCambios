@@ -1,0 +1,21 @@
+switch-digiconecu.duckdns.org {
+    # 1. Frontend (Root)
+    # Redirige todo el tráfico raíz al contenedor del Frontend
+    reverse_proxy switch-frontend:80
+
+    # 2. API Gateway (Kong)
+    # Redirige /transacciones y otras rutas de API a Kong
+    handle_path /transacciones* {
+        reverse_proxy kong-gateway:8000
+    }
+    
+    # Redirige también /api para compatibilidad general si se usa
+    handle_path /api* {
+        reverse_proxy kong-gateway:8000
+    }
+
+    # Logs para depuración
+    log {
+        output stdout
+    }
+}
