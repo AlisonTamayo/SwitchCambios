@@ -2,11 +2,10 @@ _format_version: "3.0"
 
 services:
   # ==============================================================================
-  # 1. FRONTEND GATEWAY (Uso exclusivo de la aplicación web)
-  # Corrección: URLs base genéricas (/api/v1) para evitar duplicidad de rutas.
+  # 1. FRONTEND / DASHBOARD API (Acceso Web)
   # ==============================================================================
   
-  # Frontend -> Transacciones (Dashboard, Stats)
+  # Nucleo (Dashboard, Stats)
   - name: frontend-nucleo
     url: http://ms-nucleo:8082/api/v1/transacciones
     routes:
@@ -15,11 +14,9 @@ services:
         strip_path: true
     plugins:
       - name: cors
-        config:
-          origins: ["*"]
-          methods: ["GET", "POST", "OPTIONS"]
+        config: { origins: ["*"], methods: ["GET", "POST", "OPTIONS"] }
 
-  # Frontend -> Directorio (Gestión de Bancos)
+  # Directorio (Gestión Bancos)
   - name: frontend-directorio
     url: http://ms-directorio:8081/api/v1
     routes:
@@ -28,12 +25,9 @@ services:
         strip_path: true
     plugins:
       - name: cors
-        config:
-          origins: ["*"]
-          methods: ["GET", "POST", "PATCH", "OPTIONS"]
+        config: { origins: ["*"], methods: ["GET", "POST", "PATCH", "OPTIONS"] }
 
-  # Frontend -> Contabilidad (Ledger, Cuentas)
-  # CORRECCION: URL base sin '/ledger' porque el frontend ya lo envía
+  # Contabilidad (Ledger)
   - name: frontend-contabilidad
     url: http://ms-contabilidad:8083/api/v1
     routes:
@@ -42,12 +36,9 @@ services:
         strip_path: true
     plugins:
       - name: cors
-        config:
-          origins: ["*"]
-          methods: ["GET", "POST", "OPTIONS"]
+        config: { origins: ["*"], methods: ["GET", "POST", "OPTIONS"] }
 
-  # Frontend -> Compensación (Ciclos, Cortes)
-  # CORRECCION: URL base sin '/compensacion' porque el frontend ya lo envía
+  # Compensación
   - name: frontend-compensacion
     url: http://ms-compensacion:8084/api/v1
     routes:
@@ -56,79 +47,54 @@ services:
         strip_path: true
     plugins:
       - name: cors
-        config:
-          origins: ["*"]
-          methods: ["GET", "POST", "OPTIONS"]
+        config: { origins: ["*"], methods: ["GET", "POST", "OPTIONS"] }
 
   # ==============================================================================
-  # 2. SWITCH API V1 (Integración estándar para Bancos)
+  # 2. CONTRACT V2 (Interfaz Unificada para Bancos)
   # ==============================================================================
-  - name: switch-api-v1-nucleo
-    url: http://ms-nucleo:8082
-    routes:
-      - name: v1-transacciones
-        paths: ["/api/v1/transacciones"]
-        strip_path: false
-    plugins:
-      - name: key-auth
-        config: { key_names: ["apikey"] }
-      - name: cors
-        config: { origins: ["*"] }
 
-  - name: switch-api-v1-directorio
-    url: http://ms-directorio:8081
-    routes:
-      - name: v1-directorio
-        paths: ["/api/v1/directorio", "/api/v1/instituciones"]
-        strip_path: false
-    plugins:
-      - name: key-auth
-        config: { key_names: ["apikey"] }
-      - name: cors
-        config: { origins: ["*"] }
-
-  # ==============================================================================
-  # 3. CONTRATO V2 (Requerimientos de Compliance - VPC Peering)
-  # ==============================================================================
-  
-  # RF-01: Transferencias
-  - name: switch-contract-v2-transfers
+  # RF-01 & RF-04: Transferencias y Consultas
+  # Ruta Externa: /api/v2/switch/transfers
+  # Ruta Interna: /api/v1/transacciones
+  - name: v2-transfers-service
     url: http://ms-nucleo:8082/api/v1/transacciones
     routes:
-      - name: v2-transfers
-        paths: 
-          - /api/v2/switch/transfers$
-          - /api/v2/switch/transfers/
+      - name: v2-transfers-route
+        paths: ["/api/v2/switch/transfers"]
         strip_path: true
-        methods: ["GET", "POST"]
+        methods: ["GET", "POST", "OPTIONS"]
     plugins:
       - name: key-auth
         config: { key_names: ["apikey"] }
       - name: cors
         config: { origins: ["*"] }
 
-  # RF-07: Devoluciones
-  - name: switch-contract-v2-returns
-    url: http://ms-contabilidad:8083/api/v1/ledger/v2/switch/transfers/return
+  # RF-07: Devoluciones (Returns)
+  # Ruta Externa: /api/v2/switch/transfers/return
+  # Ruta Interna: /api/v1/transacciones/devoluciones (NUCLEO - Para validación completa)
+  - name: v2-returns-service
+    url: http://ms-nucleo:8082/api/v1/transacciones/devoluciones
     routes:
-      - name: v2-returns
+      - name: v2-returns-route
         paths: ["/api/v2/switch/transfers/return"]
         strip_path: true
-        methods: ["POST"]
+        methods: ["POST", "OPTIONS"]
     plugins:
       - name: key-auth
         config: { key_names: ["apikey"] }
       - name: cors
         config: { origins: ["*"] }
 
-  # RF-01.1: Funding
-  - name: switch-contract-v2-funding
+  # RF-01.1: Funding / Saldo Técnico
+  # Ruta Externa: /funding/{bankId}
+  # Ruta Interna: /api/v1/ledger/cuentas/{bic}
+  - name: v2-funding-service
     url: http://ms-contabilidad:8083/api/v1/ledger/cuentas
     routes:
-      - name: v2-funding
+      - name: v2-funding-route
         paths: ["/funding"]
         strip_path: true
-        methods: ["GET"]
+        methods: ["GET", "OPTIONS"]
     plugins:
       - name: key-auth
         config: { key_names: ["apikey"] }
