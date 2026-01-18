@@ -19,7 +19,7 @@ export default function Transacciones() {
             if (filters.estado) params.estado = filters.estado;
 
             // Use the new endpoint created in backend step 529
-            const response = await nucleoApi.get('/transacciones/busqueda', { params });
+            const response = await nucleoApi.get('/busqueda', { params });
             setResults(response.data);
         } catch (error) {
             console.error("Error buscando transacciones:", error);

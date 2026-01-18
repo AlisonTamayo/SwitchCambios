@@ -37,7 +37,7 @@ export default function Dashboard() {
         async function loadData() {
             try {
                 const [statsRes, banksRes] = await Promise.all([
-                    nucleoApi.get('/transacciones/stats'),
+                    nucleoApi.get('/stats'),
                     directorioApi.get('/instituciones')
                 ]);
                 setStats(statsRes.data);

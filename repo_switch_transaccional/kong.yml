@@ -7,7 +7,7 @@ services:
       - name: ruta-transacciones
         paths:
           - /transacciones
-        strip_path: true
+        strip_path: false
         methods:
           - POST
           - GET
