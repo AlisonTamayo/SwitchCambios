@@ -44,13 +44,13 @@ foreach ($item in $mapping) {
         }
 
         # 4. Commit
-        Write-Host "   - Git Add..."
-        git add . 2>$null
+        Write-Host "   - Git Add All (incluyendo borrados)..."
+        git add -A 2>$null
         
         $status = git status --porcelain
         if ($status) {
             Write-Host "   - Git Commit..."
-            git commit -m "Migracion GCP V3" | Out-Null
+            git commit -m "Sync final: Limpieza total y POMs corregidos" | Out-Null
         }
         else {
             Write-Host "   - Nada nuevo por subir."

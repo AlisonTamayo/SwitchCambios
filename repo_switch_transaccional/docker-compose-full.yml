@@ -5,7 +5,6 @@ services:
   directorio-db:
     image: mongo:latest
     environment:
-
       - MONGO_INITDB_ROOT_USERNAME=admin
       - MONGO_INITDB_ROOT_PASSWORD=admin
     ports: [ "27017:27017" ]
@@ -189,15 +188,9 @@ services:
       KONG_PROXY_LISTEN: 0.0.0.0:8000
       KONG_ADMIN_LISTEN: 0.0.0.0:8001
       KONG_STATUS_LISTEN: 0.0.0.0:8100
-
-      # --- CONFIGURACIÓN DEL PANEL (FIX VISUAL) ---
       KONG_ADMIN_GUI_LISTEN: 0.0.0.0:8002
-      # Esta URL le dice al panel dónde buscar los datos (CORS FIX)
-      # IMPORTANTE: Asegúrate que esta IP es accesible desde tu navegador
-      KONG_ADMIN_GUI_API_URL: http://3.140.230.212:8001
-
+      KONG_ADMIN_GUI_API_URL: http://34.16.106.7:8001
       KONG_PLUGINS: bundled,prometheus,cors,key-auth
-
     ports:
       - "8000:8000"
       - "8001:8001"
@@ -224,8 +217,6 @@ services:
     depends_on:
       - switch-frontend
       - kong
-    networks:
-      - default
 
   # ==========================================
   # 9. FRONTEND (React + Vite)
@@ -241,9 +232,13 @@ services:
       - ms-nucleo
       - ms-contabilidad
       - ms-compensacion
-    networks:
-      - default
 
 volumes:
   caddy_data:
   caddy_config:
+
+    # DEFINICIÓN DE RED EXPLÍCITA PARA CONEXIÓN EXTERNA
+networks:
+  default:
+    name: switch-network
+    driver: bridge

@@ -1,111 +1,153 @@
 _format_version: "3.0"
 
 services:
-  - name: switch-nucleo-service
-    url: http://ms-nucleo:8082/api/v1
+  # ==============================================================================
+  # 1. FRONTEND GATEWAY (Uso exclusivo de la aplicación web)
+  # Corrección: URLs base genéricas (/api/v1) para evitar duplicidad de rutas.
+  # ==============================================================================
+  
+  # Frontend -> Transacciones (Dashboard, Stats)
+  - name: frontend-nucleo
+    url: http://ms-nucleo:8082/api/v1/transacciones
     routes:
-      - name: ruta-transacciones
-        paths:
-          - /transacciones
-        strip_path: false
-        methods:
-          - POST
-          - GET
+      - name: fe-transacciones
+        paths: ["/transacciones"]
+        strip_path: true
     plugins:
-      - name: key-auth
-        config:
-          key_names:
-            - apikey
       - name: cors
         config:
-          origins:
-            - "*"
-          methods:
-            - GET
-            - POST
-            - OPTIONS
+          origins: ["*"]
+          methods: ["GET", "POST", "OPTIONS"]
 
-  - name: switch-directorio-service
+  # Frontend -> Directorio (Gestión de Bancos)
+  - name: frontend-directorio
     url: http://ms-directorio:8081/api/v1
     routes:
-      - name: ruta-directorio
-        paths:
-          - /directorio
+      - name: fe-directorio
+        paths: ["/directorio"]
         strip_path: true
     plugins:
-      - name: key-auth
-        config:
-          key_names:
-            - apikey
       - name: cors
         config:
-          origins:
-            - "*"
-          methods:
-            - GET
-            - POST
-            - PATCH
-            - OPTIONS
+          origins: ["*"]
+          methods: ["GET", "POST", "PATCH", "OPTIONS"]
 
-  - name: switch-contabilidad-service
+  # Frontend -> Contabilidad (Ledger, Cuentas)
+  # CORRECCION: URL base sin '/ledger' porque el frontend ya lo envía
+  - name: frontend-contabilidad
     url: http://ms-contabilidad:8083/api/v1
     routes:
-      - name: ruta-contabilidad
-        paths:
-          - /contabilidad
+      - name: fe-contabilidad
+        paths: ["/contabilidad"]
         strip_path: true
     plugins:
-      - name: key-auth
-        config:
-          key_names:
-            - apikey
       - name: cors
         config:
-          origins:
-            - "*"
-          methods:
-            - GET
-            - POST
-            - OPTIONS
+          origins: ["*"]
+          methods: ["GET", "POST", "OPTIONS"]
 
-  - name: switch-compensacion-service
+  # Frontend -> Compensación (Ciclos, Cortes)
+  # CORRECCION: URL base sin '/compensacion' porque el frontend ya lo envía
+  - name: frontend-compensacion
     url: http://ms-compensacion:8084/api/v1
     routes:
-      - name: ruta-compensacion
-        paths:
-          - /compensacion
+      - name: fe-compensacion
+        paths: ["/compensacion"]
         strip_path: true
     plugins:
-      - name: key-auth
-        config:
-          key_names:
-            - apikey
       - name: cors
         config:
-          origins:
-            - "*"
-          methods:
-            - GET
-            - POST
-            - OPTIONS
+          origins: ["*"]
+          methods: ["GET", "POST", "OPTIONS"]
+
+  # ==============================================================================
+  # 2. SWITCH API V1 (Integración estándar para Bancos)
+  # ==============================================================================
+  - name: switch-api-v1-nucleo
+    url: http://ms-nucleo:8082
+    routes:
+      - name: v1-transacciones
+        paths: ["/api/v1/transacciones"]
+        strip_path: false
+    plugins:
+      - name: key-auth
+        config: { key_names: ["apikey"] }
+      - name: cors
+        config: { origins: ["*"] }
+
+  - name: switch-api-v1-directorio
+    url: http://ms-directorio:8081
+    routes:
+      - name: v1-directorio
+        paths: ["/api/v1/directorio", "/api/v1/instituciones"]
+        strip_path: false
+    plugins:
+      - name: key-auth
+        config: { key_names: ["apikey"] }
+      - name: cors
+        config: { origins: ["*"] }
+
+  # ==============================================================================
+  # 3. CONTRATO V2 (Requerimientos de Compliance - VPC Peering)
+  # ==============================================================================
+  
+  # RF-01: Transferencias
+  - name: switch-contract-v2-transfers
+    url: http://ms-nucleo:8082/api/v1/transacciones
+    routes:
+      - name: v2-transfers
+        paths: 
+          - /api/v2/switch/transfers$
+          - /api/v2/switch/transfers/
+        strip_path: true
+        methods: ["GET", "POST"]
+    plugins:
+      - name: key-auth
+        config: { key_names: ["apikey"] }
+      - name: cors
+        config: { origins: ["*"] }
+
+  # RF-07: Devoluciones
+  - name: switch-contract-v2-returns
+    url: http://ms-contabilidad:8083/api/v1/ledger/v2/switch/transfers/return
+    routes:
+      - name: v2-returns
+        paths: ["/api/v2/switch/transfers/return"]
+        strip_path: true
+        methods: ["POST"]
+    plugins:
+      - name: key-auth
+        config: { key_names: ["apikey"] }
+      - name: cors
+        config: { origins: ["*"] }
+
+  # RF-01.1: Funding
+  - name: switch-contract-v2-funding
+    url: http://ms-contabilidad:8083/api/v1/ledger/cuentas
+    routes:
+      - name: v2-funding
+        paths: ["/funding"]
+        strip_path: true
+        methods: ["GET"]
+    plugins:
+      - name: key-auth
+        config: { key_names: ["apikey"] }
+      - name: cors
+        config: { origins: ["*"] }
 
 consumers:
   - username: NEXUS_BANK
     keyauth_credentials:
       - key: NEXUS_SECRET_KEY_123
-
   - username: ECUSOL_BK
     keyauth_credentials:
       - key: PUBLIC_KEY_ECUSOL_67890
-
   - username: ARCBANK
     keyauth_credentials:
       - key: ARCBANK_SECRET_KEY_2025_XYZ
-
   - username: BANTEC
     keyauth_credentials:
       - key: BANTEC_SECRET_KEY_2025
-
   - username: SWITCH_ADMIN
     keyauth_credentials:
       - key: SWITCH_ADMIN_SUPER_SECRET_KEY
