@@ -60,6 +60,7 @@ services:
       context: ../ms-nucleo
       dockerfile: Dockerfile
     container_name: ms-nucleo
+    restart: always
     ports: [ "8082:8082" ]
     environment:
       - SERVER_PORT=8082
@@ -67,10 +68,14 @@ services:
       - SPRING_DATASOURCE_USERNAME=postgres
       - SPRING_DATASOURCE_PASSWORD=admin
       - SPRING_JPA_HIBERNATE_DDL_AUTO=update
+      - SPRING_REDIS_HOST=redis-switch
+      - SPRING_REDIS_PORT=6379
       - URL_DIRECTORIO=http://ms-directorio:8081
       - URL_CONTABILIDAD=http://ms-contabilidad:8083
     depends_on:
       nucleo-db:
+        condition: service_healthy
+      redis-switch:
         condition: service_healthy
       ms-directorio:
         condition: service_started
@@ -190,6 +195,9 @@ services:
       KONG_STATUS_LISTEN: 0.0.0.0:8100
       KONG_ADMIN_GUI_LISTEN: 0.0.0.0:8002
       KONG_ADMIN_GUI_API_URL: http://34.16.106.7:8001
+      # FIX FINAL DNS: Dejar que Docker maneje el DNS (Quitar resolver forzado)
+      # Y forzar uso de hosts del sistema
+      KONG_DNS_HOSTSFILE: /etc/hosts
       KONG_PLUGINS: bundled,prometheus,cors,key-auth
     ports:
       - "8000:8000"

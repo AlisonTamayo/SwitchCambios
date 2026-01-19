@@ -28,6 +28,7 @@ public class SolicitudDevolucionServicio {
     public SolicitudDevolucionDTO create(SolicitudCreacionDTO req) {
         log.info("Creando Devolución id={} original={}", req.getId(), req.getIdInstruccionOriginal());
 
+        log.info("Validando motivo '{}'", req.getCodigoMotivo());
         if (!catalogoErrorRepository.existsById(req.getCodigoMotivo())) {
             throw new RuntimeException("MOTIVO_INVALIDO: El códigoMotivo no existe en el Catálogo de Errores.");
         }

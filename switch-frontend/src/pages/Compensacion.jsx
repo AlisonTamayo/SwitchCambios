@@ -1,28 +1,54 @@
 import { useState, useEffect } from 'react';
 import { compensacionApi } from '../api/client';
-import { ArrowDownCircle, CheckCircle, Clock } from 'lucide-react';
+import { ArrowDownCircle, CheckCircle, Clock, FileText, PlayCircle } from 'lucide-react';
 
 export default function Compensacion() {
     const [ciclos, setCiclos] = useState([]);
     const [cicloActivo, setCicloActivo] = useState(null);
     const [posiciones, setPosiciones] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [uptime, setUptime] = useState('');
+    const [duracionProximo, setDuracionProximo] = useState(10); // Default 10 min
 
     useEffect(() => {
         loadData();
+        const interval = setInterval(loadData, 10000); // Polling cada 10s
+        return () => clearInterval(interval);
     }, []);
+
+    useEffect(() => {
+        if (cicloActivo) {
+            const timer = setInterval(() => {
+                const start = new Date(cicloActivo.fechaApertura).getTime();
+                const now = new Date().getTime();
+                const diff = Math.floor((now - start) / 1000);
+                const mm = Math.floor(diff / 60).toString().padStart(2, '0');
+                const ss = (diff % 60).toString().padStart(2, '0');
+                setUptime(`${mm}:${ss}`);
+            }, 1000);
+            return () => clearInterval(timer);
+        }
+    }, [cicloActivo]);
 
     const loadData = async () => {
         try {
+            // FIX: Using relative path. baseURL in client.js + Kong Config handles the rest.
+            // Client BaseURL: .../compensacion
+            // Kong maps /compensacion -> http://ms-compensacion:8084/api/v1
+            // So we just need to append the resource path relative to the MS root.
             const res = await compensacionApi.get('/compensacion/ciclos');
             const lista = res.data;
             setCiclos(lista);
 
-
             const activo = lista.find(c => c.estado === 'ABIERTO');
             if (activo) {
-                setCicloActivo(activo);
-                loadPosiciones(activo.id);
+                // Si cambió el ciclo activo, recargar posiciones
+                if (!cicloActivo || cicloActivo.id !== activo.id) {
+                    setCicloActivo(activo);
+                    loadPosiciones(activo.id);
+                }
+            } else {
+                setCicloActivo(null);
             }
         } catch (error) {
             console.error("Error cargando ciclos:", error);
@@ -42,42 +68,66 @@ export default function Compensacion() {
 
     const handleCierre = async () => {
         if (!cicloActivo) return;
-        if (!window.confirm("¿Confirmar CIERRE DE CICLO? Esto generará el archivo de liquidación y abrirá un nuevo ciclo.")) return;
 
-        try {
-            await compensacionApi.post(`/compensacion/ciclos/${cicloActivo.id}/cierre`);
-            alert("Ciclo cerrado exitosamente. Nuevo ciclo iniciado.");
-            window.location.reload();
-        } catch (error) {
-            alert("Error al cerrar ciclo: " + (error.response?.data?.message || error.message));
+        // AUTOMATIZACIÓN: No preguntar tiempo. Usar default 10 min.
+        const minInt = 10;
+
+        if (window.confirm(`¿Seguro que deseas cerrar el Ciclo #${cicloActivo.numeroCiclo} ahora?`)) {
+            try {
+                await compensacionApi.post(`/compensacion/ciclos/${cicloActivo.id}/cierre?proximoCicloEnMinutos=${minInt}`);
+                alert(`✅ Ciclo #${cicloActivo.numeroCiclo} CERRADO. Siguiente en ${minInt} min.`);
+                loadData();
+            } catch (error) {
+                // Manejo de error mejorado para ver DEBUG INFO del backend
+                const msg = error.response?.data || error.message;
+                alert("Error al cerrar ciclo: " + msg);
+            }
         }
+    };
+
+    const descargarPDF = (cicloId) => {
+        // Usamos la ruta relativa que pasa por Nginx -> Kong -> MS
+        // Rutas: /api (Nginx) -> /compensacion (Kong Strip) -> /compensacion (Controller)
+        window.open(`/api/compensacion/compensacion/reporte/pdf/${cicloId}`, '_blank');
     };
 
     return (
         <div className="space-y-6">
             <h1 className="text-2xl font-bold text-gray-900">Compensación y Liquidación (Clearing)</h1>
 
-
             <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
                 <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-indigo-50">
                     <div>
-                        <h2 className="text-lg font-bold text-indigo-900">
-                            Ciclo Actual #{cicloActivo?.numeroCiclo || '-'}
+                        <h2 className="text-lg font-bold text-indigo-900 flex items-center gap-2">
+                            {cicloActivo ? (
+                                <><PlayCircle className="text-green-500 animate-pulse" /> Ciclo Activo #{cicloActivo.numeroCiclo}</>
+                            ) : (
+                                <><Clock className="text-gray-400" /> Sin Ciclo Activo</>
+                            )}
                         </h2>
-                        <span className="text-xs font-mono text-indigo-600">
-                            Abierto desde: {cicloActivo ? new Date(cicloActivo.fechaApertura).toLocaleString() : '...'}
+                        <span className="text-xs font-mono text-indigo-600 block mt-1">
+                            {cicloActivo ? `⏱️ Tiempo Abierto: ${uptime}` : 'Esperando inicio...'}
+                        </span>
+                        <span className="text-xs text-gray-500">
+                            Apertura: {cicloActivo ? new Date(cicloActivo.fechaApertura).toLocaleTimeString() : '--:--'}
                         </span>
                     </div>
+
                     {cicloActivo && (
-                        <button
-                            onClick={handleCierre}
-                            className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 shadow-sm text-sm font-semibold"
-                        >
-                            EJECUTAR CIERRE
-                        </button>
-                    )}
-                    {!cicloActivo && !loading && (
-                        <span className="text-red-500 font-bold">No hay ciclo activo</span>
+                        <div className="flex gap-2">
+                            <button
+                                onClick={() => loadPosiciones(cicloActivo.id)}
+                                className="bg-white text-indigo-600 px-3 py-2 rounded-lg border border-indigo-200 hover:bg-indigo-50 text-sm font-semibold"
+                            >
+                                🔄 Refrescar
+                            </button>
+                            <button
+                                onClick={handleCierre}
+                                className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 shadow-sm text-sm font-semibold flex items-center gap-2"
+                            >
+                                <CheckCircle size={16} /> CERRAR CICLO
+                            </button>
+                        </div>
                     )}
                 </div>
 
@@ -117,7 +167,6 @@ export default function Compensacion() {
                 </div>
             </div>
 
-
             <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
                 <div className="p-6 border-b border-gray-100">
                     <h3 className="text-lg font-bold text-gray-900">Historial de Cortes</h3>
@@ -129,7 +178,7 @@ export default function Compensacion() {
                             <th className="px-6 py-4">Apertura</th>
                             <th className="px-6 py-4">Cierre</th>
                             <th className="px-6 py-4">Estado</th>
-                            <th className="px-6 py-4 text-right">Reporte</th>
+                            <th className="px-6 py-4 text-right">Reportes</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
@@ -151,15 +200,15 @@ export default function Compensacion() {
                                         </span>
                                     )}
                                 </td>
-                                <td className="px-6 py-4 text-right">
-                                    {c.estado === 'CERRADO' && (
-                                        <button
-                                            onClick={() => window.open(`http://localhost:8084/api/v1/compensacion/ciclos/${c.id}/xml`, '_blank')}
-                                            className="text-indigo-600 hover:text-indigo-900 flex items-center justify-end gap-1 ml-auto"
-                                        >
-                                            <ArrowDownCircle size={16} /> XML
-                                        </button>
-                                    )}
+                                <td className="px-6 py-4 text-right flex justify-end gap-2">
+                                    {/* PDF BUTTON */}
+                                    <button
+                                        onClick={() => descargarPDF(c.id)}
+                                        className="text-red-600 hover:text-red-800 flex items-center gap-1 bg-red-50 px-2 py-1 rounded"
+                                        title="Descargar PDF"
+                                    >
+                                        <FileText size={16} /> PDF
+                                    </button>
                                 </td>
                             </tr>
                         ))}

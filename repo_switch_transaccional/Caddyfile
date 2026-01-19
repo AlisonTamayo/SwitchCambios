@@ -1,20 +1,41 @@
 switch-digiconecu.duckdns.org {
-    # 1. Frontend (Root)
-    # Redirige todo el tráfico raíz al contenedor del Frontend
-    reverse_proxy switch-frontend:80
-
-    # 2. API Gateway (Kong)
-    # Usamos 'handle' para NO borrar el prefijo y que Kong reciba la ruta completa
-    handle /transacciones* {
-        reverse_proxy kong-gateway:8000
-    }
-    
-    # Para el Frontend que añade /api, DEBEMOS quitarlo con handle_path
-    handle_path /api* {
+    # 1. RUTAS DE BANCOS (RFC V2)
+    # Conservan el prefijo /api porque Kong lo necesita para el match
+    handle /api/v2/* {
         reverse_proxy kong-gateway:8000
     }
 
-    # Logs para depuración
+    # 2. RUTAS DE FRONTEND (Internas)
+    # Quitan el prefijo /api para que coincidan con las rutas cortas de Kong (/transacciones)
+    handle_path /api/* {
+        reverse_proxy kong-gateway:8000
+    }
+
+    # 3. FRONTEND (Catch-all)
+    # Todo lo demas va al React App
+    handle {
+        reverse_proxy switch-frontend:80
+    }
+
+    log {
+        output stdout
+    }
+}
+
+:80 {
+    # (Misma logica para acceso por IP)
+    handle /api/v2/* {
+        reverse_proxy kong-gateway:8000
+    }
+
+    handle_path /api/* {
+        reverse_proxy kong-gateway:8000
+    }
+
+    handle {
+        reverse_proxy switch-frontend:80
+    }
+
     log {
         output stdout
     }

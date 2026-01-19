@@ -98,7 +98,7 @@ public class ContabilidadServicio {
     @Transactional
     public CuentaDTO recargarSaldo(String bic, BigDecimal monto, UUID idInstruccion) {
 
-        if (movimientoRepo.findByIdInstruccion(idInstruccion).isPresent()) {
+        if (!movimientoRepo.findByIdInstruccion(idInstruccion).isEmpty()) {
 
             CuentaTecnica cuenta = cuentaRepo.findByCodigoBic(bic)
                     .orElseThrow(() -> new RuntimeException("Cuenta no encontrada"));
@@ -136,9 +136,11 @@ public class ContabilidadServicio {
         }
         UUID originalInstructionId = UUID.fromString(originalIdStr);
 
-        Movimiento original = movimientoRepo.findByIdInstruccion(originalInstructionId)
-                .orElseThrow(
-                        () -> new RuntimeException("Transacción original no encontrada: " + originalInstructionId));
+        List<Movimiento> encontrados = movimientoRepo.findByIdInstruccion(originalInstructionId);
+        if (encontrados.isEmpty()) {
+            throw new RuntimeException("Transacción original no encontrada: " + originalInstructionId);
+        }
+        Movimiento original = encontrados.get(0);
 
         if (original.getFechaRegistro().isBefore(LocalDateTime.now().minusHours(48))) {
             throw new RuntimeException("La transacción original es mayor a 48 horas, no se puede revertir.");

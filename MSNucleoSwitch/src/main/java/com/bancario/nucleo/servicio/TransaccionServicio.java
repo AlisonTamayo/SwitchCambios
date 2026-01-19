@@ -88,8 +88,10 @@ public class TransaccionServicio {
             claimed = redisTemplate.opsForValue().setIfAbsent(redisKey, redisValue, java.time.Duration.ofHours(24));
         } catch (Exception e) {
             log.error("Fallo Redis SET: {}. Pasando a Fallback DB.", e.getMessage());
-            boolean existeEnDb = idempotenciaRepositorio.findByHashContenido("HASH_" + idInstruccion).isPresent();
-            claimed = !existeEnDb;
+            boolean existeEnRespaldo = idempotenciaRepositorio.findByHashContenido("HASH_" + idInstruccion).isPresent();
+            boolean existeEnTx = transaccionRepositorio.existsById(idInstruccion);
+
+            claimed = !(existeEnRespaldo || existeEnTx);
         }
 
         if (Boolean.TRUE.equals(claimed)) {
@@ -105,13 +107,21 @@ public class TransaccionServicio {
             if (existingVal == null) {
                 return idempotenciaRepositorio.findByHashContenido("HASH_" + idInstruccion)
                         .map(respaldo -> {
-                            log.warn(
-                                    "Duplicado detectado via DB (Redis Offline). Retornando original ISO 20022 para {}",
+                            log.warn("Duplicado detectado via DB-Backup (Redis Offline). Retornando original para {}",
                                     idInstruccion);
                             return transaccionMapper.toDTO(respaldo.getTransaccion());
                         })
-                        .orElseThrow(() -> new IllegalStateException(
-                                "Inconsistencia: Detectado como duplicado pero no encontrado en DB ni Redis."));
+                        .orElseGet(() -> {
+                            return transaccionRepositorio.findById(idInstruccion)
+                                    .map(txEncurso -> {
+                                        log.warn(
+                                                "Duplicado detectado via DB-Tx (Redis Offline). Transacción en curso o sin respaldo: {}",
+                                                idInstruccion);
+                                        return transaccionMapper.toDTO(txEncurso);
+                                    })
+                                    .orElseThrow(() -> new IllegalStateException(
+                                            "Inconsistencia: Detectado como duplicado pero no encontrado en DB ni Redis."));
+                        });
             } else {
                 String[] parts = existingVal.split("\\|");
                 String storedMd5 = parts[0];
@@ -151,12 +161,8 @@ public class TransaccionServicio {
             log.info("Ledger: Debitando {} a {}", monto, bicOrigen);
             registrarMovimientoContable(bicOrigen, idInstruccion, monto, "DEBIT");
 
-            log.info("Ledger: Acreditando {} a {}", monto, bicDestino);
-            registrarMovimientoContable(bicDestino, idInstruccion, monto, "CREDIT");
-
-            log.info("Clearing: Registrando posiciones en Ciclo ABIERTO (Auto)");
+            log.info("Clearing: Registrando posición Origen (Débito)");
             notificarCompensacion(bicOrigen, monto, true);
-            notificarCompensacion(bicDestino, monto, false);
 
             int[] tiemposEspera = { 0, 800, 2000, 4000 };
             boolean entregado = false;
@@ -192,6 +198,13 @@ public class TransaccionServicio {
                         });
 
                         log.info("Webhook: Entregado exitosamente.");
+
+                        log.info("Ledger: Acreditando {} a {}", monto, bicDestino);
+                        registrarMovimientoContable(bicDestino, idInstruccion, monto, "CREDIT");
+
+                        log.info("Clearing: Registrando posición Destino (Crédito)");
+                        notificarCompensacion(bicDestino, monto, false);
+
                         entregado = true;
                         break;
 
@@ -290,7 +303,16 @@ public class TransaccionServicio {
                                 tx = transaccionRepositorio.save(tx);
 
                                 if ("COMPLETED".equals(nuevoEstado)) {
+                                    try {
+                                        registrarMovimientoContable(tx.getCodigoBicDestino(), tx.getIdInstruccion(),
+                                                tx.getMonto(), "CREDIT");
+                                        notificarCompensacion(tx.getCodigoBicDestino(), tx.getMonto(), false);
+                                    } catch (Exception ex) {
+                                        log.error("Error aplicando contabilidad en Recuperación: {}", ex.getMessage());
+                                    }
                                     guardarRespaldoIdempotencia(tx, "EXITO (RECUPERADO)");
+                                } else if ("FAILED".equals(nuevoEstado)) {
+                                    ejecutarReversoSaga(tx);
                                 }
                             }
                         }
@@ -301,6 +323,7 @@ public class TransaccionServicio {
                             log.error("RF-04: Tiempo máximo de resolución agotado (60s). Marcando FAILED.");
                             tx.setEstado("FAILED");
                             tx = transaccionRepositorio.save(tx);
+                            ejecutarReversoSaga(tx);
                         }
                     }
 
@@ -326,6 +349,18 @@ public class TransaccionServicio {
             throw new BusinessException("El 'originalInstructionId' no tiene un formato UUID válido: " + originalId);
         }
 
+        Transaccion originalTxCheck = transaccionRepositorio.findById(UUID.fromString(originalId))
+                .orElseThrow(() -> new BusinessException("Transacción original no encontrada en Switch"));
+
+        if ("REVERSED".equals(originalTxCheck.getEstado())) {
+            log.warn("RF-03 Idempotencia: Transacción {} ya está REVERSED. Retornando éxito sin reprocesar.",
+                    originalId);
+            Map<String, String> response = new java.util.HashMap<>();
+            response.put("status", "ALREADY_REVERSED");
+            response.put("message", "La transacción ya fue reversada previamente.");
+            return response;
+        }
+
         log.info("Procesando solicitud de devolución para instrucción original: {}", originalId);
         String returnId = returnRequest.getHeader().getMessageId();
 
@@ -338,9 +373,7 @@ public class TransaccionServicio {
         try {
             claimed = redisTemplate.opsForValue().setIfAbsent(redisKey, redisValue, java.time.Duration.ofHours(24));
         } catch (Exception e) {
-            log.error(
-                    "Fallo Redis SET (Return): {}. Asumiendo nuevo por seguridad (o fallback DB si existiera tabla de returns).",
-                    e.getMessage());
+            log.error("Fallo Redis SET (Return): {}. Fallback a DB.", e.getMessage());
             claimed = true;
         }
 
@@ -544,9 +577,8 @@ public class TransaccionServicio {
         try {
             log.warn("SAGA COMPENSACIÓN: Iniciando reverso local para Tx {}", tx.getIdInstruccion());
             registrarMovimientoContable(tx.getCodigoBicOrigen(), tx.getIdInstruccion(), tx.getMonto(), "CREDIT");
-            registrarMovimientoContable(tx.getCodigoBicDestino(), tx.getIdInstruccion(), tx.getMonto(), "DEBIT");
             notificarCompensacion(tx.getCodigoBicOrigen(), tx.getMonto(), false);
-            notificarCompensacion(tx.getCodigoBicDestino(), tx.getMonto(), true);
+
             log.info("SAGA COMPENSACIÓN: Reverso completado exitosamente.");
         } catch (Exception e) {
             log.error("CRITICAL: Fallo en Saga de Reverso. Inconsistencia Contable posible. {}", e.getMessage());

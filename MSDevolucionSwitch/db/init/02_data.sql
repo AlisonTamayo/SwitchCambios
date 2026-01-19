@@ -1,0 +1,8 @@
+INSERT INTO catalogoerror (codigo, descripcion) VALUES ('AC01', 'Numero de cuenta incorrecto');
+INSERT INTO catalogoerror (codigo, descripcion) VALUES ('AC04', 'Cuenta cerrada');
+INSERT INTO catalogoerror (codigo, descripcion) VALUES ('AC06', 'Cuenta bloqueada');
+INSERT INTO catalogoerror (codigo, descripcion) VALUES ('AG01', 'Transaccion prohibida');
+INSERT INTO catalogoerror (codigo, descripcion) VALUES ('AM04', 'Fondos insuficientes');
+INSERT INTO catalogoerror (codigo, descripcion) VALUES ('AM05', 'Duplicado');
+INSERT INTO catalogoerror (codigo, descripcion) VALUES ('MS03', 'Error tecnico en entidad destino');
+INSERT INTO catalogoerror (codigo, descripcion) VALUES ('RC01', 'Identificador de banco incorrecto');

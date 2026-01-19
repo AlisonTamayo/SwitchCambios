@@ -41,7 +41,7 @@ public class SolicitudDevolucionControlador {
         return ResponseEntity.ok(service.findByOriginal(idInstruccionOriginal));
     }
 
-    @PatchMapping("/{id}/estado")
+    @PutMapping("/{id}/estado")
     @Operation(summary = "Actualizar estado")
     public ResponseEntity<SolicitudDevolucionDTO> actualizarEstado(
             @PathVariable UUID id,

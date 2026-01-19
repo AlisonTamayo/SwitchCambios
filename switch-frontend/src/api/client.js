@@ -1,7 +1,8 @@
 import axios from 'axios';
 
 
-const API_URL = import.meta.env.VITE_API_URL || '/api';
+// Forzamos el uso de ruta relativa para que funcione con la IP pública o cualquier dominio
+const API_URL = '/api';
 
 
 const headers = { 'apikey': 'SWITCH_ADMIN_SUPER_SECRET_KEY' };

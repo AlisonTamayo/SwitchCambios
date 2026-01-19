@@ -60,10 +60,15 @@ public class CompensacionControlador {
 
     @PostMapping("/ciclos/{cicloId}/cierre")
     @Operation(summary = "EJECUTAR CIERRE DIARIO (Settlement)", description = "Cierra ciclo actual y programa el siguiente con la duración especificada (o 10 min por defecto).")
-    public ResponseEntity<ArchivoDTO> cerrarCiclo(
+    public ResponseEntity<?> cerrarCiclo(
             @PathVariable Integer cicloId,
             @RequestParam(required = false, defaultValue = "10") Integer proximoCicloEnMinutos) {
-        return ResponseEntity.ok(service.realizarCierreDiario(cicloId, proximoCicloEnMinutos));
+        try {
+            return ResponseEntity.ok(service.realizarCierreDiario(cicloId, proximoCicloEnMinutos));
+        } catch (Exception e) {
+            log.error("Error cerrando ciclo: ", e);
+            return ResponseEntity.badRequest().body("DEBUG INFO: " + e.getMessage());
+        }
     }
 
     @GetMapping("/reporte/pdf/{cicloId}")

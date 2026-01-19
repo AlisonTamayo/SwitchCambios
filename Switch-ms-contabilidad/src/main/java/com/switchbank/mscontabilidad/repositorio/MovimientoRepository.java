@@ -10,7 +10,7 @@ import java.util.UUID;
 public interface MovimientoRepository extends JpaRepository<Movimiento, Long> {
     List<Movimiento> findByCuentaId(UUID idCuenta);
 
-    java.util.Optional<Movimiento> findByIdInstruccion(UUID idInstruccion);
+    List<Movimiento> findByIdInstruccion(UUID idInstruccion);
 
     List<Movimiento> findByFechaRegistroBetween(java.time.LocalDateTime start, java.time.LocalDateTime end);
 
