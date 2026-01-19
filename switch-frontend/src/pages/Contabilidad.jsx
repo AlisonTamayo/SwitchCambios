@@ -13,35 +13,15 @@ export default function Contabilidad() {
     const loadData = async () => {
         setLoading(true);
         try {
-            // 1. Get Banks
             const banksRes = await directorioApi.get('/instituciones');
             const banks = banksRes.data;
 
-            // 2. Get Ledger for each bank
             const ledgerPromises = banks.map(async (bank) => {
-                const bic = bank.codigoBic || bank.id || bank._id; // Safe extraction
+                const bic = bank.codigoBic || bank.id || bank._id;
                 if (!bic) return null;
 
                 try {
-                    // Note: Endpoint expects /cuentas/{bic} but verify if /ledger prefix is needed based on api/client.js
-                    // client.js base URL often includes /api/v1? No, usually typical setup is base URL. 
-                    // Let's assume contabilidadApi base is correct. 
-                    // Previous code used `/ledger/cuentas/${bic}`. 
-                    // Let's stick to what was working or intended: `/cuentas/${bic}` if base url has /api/v1/ledger? 
-                    // Looking at Controller: @RequestMapping("/api/v1/ledger")
-                    // Looking at client.js (assumed): likely base is localhost:8083. So we need full path relative to base.
-                    // Controller has @GetMapping("/cuentas/{bic}") inside /api/v1/ledger
-                    // So path is /cuentas/{bic} IF axios instance has /api/v1/ledger.
-                    // But usually axios instance is just host.
-                    // Existing code had `/ledger/cuentas/${bank.codigoBic}`. Let's keep `/cuentas/${bic}` if the client is scoped, or `/cuentas` 
-                    // Wait, previous code: `contabilidadApi.get('/ledger/cuentas/${bank.codigoBic}')`
-                    // Let's verify client.js if possible, but assuming previous code path was intended.
-                    // Actually, let's use `/cuentas/${bic}` and assume client is properly removed prefix or verify. 
-                    // The Controller is at /api/v1/ledger. 
-                    // If client.js points to http://localhost:8083/api/v1/ledger, then `/cuentas` is correct.
-                    // If client.js points to http://localhost:8083, then `/api/v1/ledger/cuentas` is correct.
-                    // In Bancos.jsx we used `contabilidadApi.post('/cuentas'...)`.
-                    // So let's stick to `/cuentas/${bic}` 
+
 
                     const res = await contabilidadApi.get(`/ledger/cuentas/${bic}`);
                     return { ...bank, codigoBic: bic, cuenta: res.data, hasAccount: true };
@@ -143,7 +123,6 @@ export default function Contabilidad() {
                             )}
                         </div>
 
-                        {/* Actions footer */}
                         <div className="bg-gray-50 px-6 py-3 flex justify-between border-t border-gray-100 items-center">
                             {item.hasAccount ? (
                                 <>

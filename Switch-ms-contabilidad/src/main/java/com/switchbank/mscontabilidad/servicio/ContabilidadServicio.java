@@ -201,12 +201,11 @@ public class ContabilidadServicio {
 
     private String calcularHash(CuentaTecnica c) {
         try {
-            String secretKey = "SECRET_KEY_INTERNAL_LEDGER_V3"; // En prod usar @Value o Vault
+            String secretKey = "SECRET_KEY_INTERNAL_LEDGER_V3";
             String saldoFormateado = c.getSaldoDisponible()
                     .setScale(2, java.math.RoundingMode.HALF_UP)
                     .toString();
 
-            // Hash = SHA256(saldo + bic + secret)
             String data = saldoFormateado + c.getCodigoBic() + secretKey;
 
             MessageDigest digest = MessageDigest.getInstance("SHA-256");

@@ -1,11 +1,9 @@
 import axios from 'axios';
 
-// En Producción (Docker/AWS), usamos Nginx como Proxy, así que la URL es relativa '/api'.
-// En desarrollo local (npm run dev), Vite puede necesitar proxy o apuntar directo a Kong.
+
 const API_URL = import.meta.env.VITE_API_URL || '/api';
 
-// Todas las peticiones pasan por el Proxy Nginx -> Kong -> Microservicios
-// INYECTAMOS LA API KEY DE ADMIN DIRECTAMENTE PARA EVITAR ERRORES 401
+
 const headers = { 'apikey': 'SWITCH_ADMIN_SUPER_SECRET_KEY' };
 
 export const nucleoApi = axios.create({ baseURL: `${API_URL}/transacciones`, headers });

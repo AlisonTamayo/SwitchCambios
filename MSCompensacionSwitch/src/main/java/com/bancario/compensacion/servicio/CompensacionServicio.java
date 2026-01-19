@@ -26,9 +26,8 @@ public class CompensacionServicio {
     private final SeguridadServicio seguridadServicio;
     private final CompensacionMapper mapper;
 
-    // Inyección del Scheduler de Spring para tareas dinámicas
     private final org.springframework.scheduling.TaskScheduler taskScheduler;
-    private java.util.concurrent.ScheduledFuture<?> scheduledTask; // Referencia para cancelar tarea anterior
+    private java.util.concurrent.ScheduledFuture<?> scheduledTask;
 
     @Transactional
     public void acumularTransaccion(Integer cicloId, String bic, BigDecimal monto, boolean esDebito) {
@@ -69,7 +68,6 @@ public class CompensacionServicio {
     public ArchivoDTO realizarCierreDiario(Integer cicloId, Integer minutosProximoCiclo) {
         log.info(">>> INICIANDO CIERRE DEL CICLO: {}", cicloId);
 
-        // 1. Cancelar cualquier tarea programada pendiente para evitar cierres dobles
         if (scheduledTask != null && !scheduledTask.isDone()) {
             scheduledTask.cancel(false);
             log.info("Tarea automática anterior cancelada.");
@@ -109,7 +107,6 @@ public class CompensacionServicio {
         cicloActual.setFechaCierre(LocalDateTime.now(java.time.ZoneOffset.UTC));
         cicloRepo.save(cicloActual);
 
-        // 2. Iniciar siguiente ciclo pasando los minutos definidos por el usuario
         iniciarSiguienteCiclo(cicloActual, posiciones, minutosProximoCiclo);
 
         return mapper.toDTO(archivo);
@@ -128,39 +125,34 @@ public class CompensacionServicio {
             PosicionInstitucion posNueva = new PosicionInstitucion();
             posNueva.setCiclo(guardado);
             posNueva.setCodigoBic(posAnt.getCodigoBic());
-            posNueva.setSaldoInicial(BigDecimal.ZERO); // Podria arrastrar saldos si fuera multivia
+            posNueva.setSaldoInicial(BigDecimal.ZERO);
             posNueva.setTotalDebitos(BigDecimal.ZERO);
             posNueva.setTotalCreditos(BigDecimal.ZERO);
             posNueva.recalcularNeto();
             posicionRepo.save(posNueva);
         }
 
-        // 3. Programar el cierre automático de ESTE nuevo ciclo
         programarCierreAutomatico(guardado.getId(), minutosDuracion != null ? minutosDuracion : 10);
 
         log.info(">>> CICLO {} INICIADO. Cierre programado en {} minutos.", nuevo.getNumeroCiclo(), minutosDuracion);
     }
 
     public void programarCierreAutomatico(Integer cicloId, int minutos) {
-        // Ejecutar cierre automático usando el mismo sevicio (se invocará a sí mismo)
-        // NOTA: En ambiente real, esto debe manejar transacciones con cuidado.
-        // Aquí simulamos la llamada.
+
         Runnable tareaCierre = () -> {
             try {
                 log.info(">>> EJECUTANDO CIERRE AUTOMÁTICO CICLO {}", cicloId);
-                // Por defecto, si es automático, el siguiente ciclo también dura 10 min
+
                 realizarCierreDiario(cicloId, 10);
             } catch (Exception e) {
                 log.error("Error en cierre automático: {}", e.getMessage());
             }
         };
 
-        // Programar fecha
         java.time.Instant fechaEjecucion = java.time.Instant.now().plus(java.time.Duration.ofMinutes(minutos));
         this.scheduledTask = taskScheduler.schedule(tareaCierre, fechaEjecucion);
     }
 
-    // --- GENERACIÓN DE PDF (OpenPDF) ---
     public byte[] generarReportePDF(Integer cicloId) {
         try (java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream()) {
             com.lowagie.text.Document document = new com.lowagie.text.Document();
@@ -168,14 +160,13 @@ public class CompensacionServicio {
 
             document.open();
 
-            // Título
             com.lowagie.text.Font titleFont = com.lowagie.text.FontFactory
                     .getFont(com.lowagie.text.FontFactory.HELVETICA_BOLD, 18);
             com.lowagie.text.Paragraph title = new com.lowagie.text.Paragraph("Reporte de Compensación (Switch V3)",
                     titleFont);
             title.setAlignment(com.lowagie.text.Element.ALIGN_CENTER);
             document.add(title);
-            document.add(new com.lowagie.text.Paragraph(" ")); // Espacio
+            document.add(new com.lowagie.text.Paragraph(" "));
 
             CicloCompensacion ciclo = cicloRepo.findById(cicloId).orElseThrow();
             document.add(new com.lowagie.text.Paragraph("Ciclo: " + ciclo.getNumeroCiclo()));
@@ -186,7 +177,6 @@ public class CompensacionServicio {
 
             document.add(new com.lowagie.text.Paragraph(" "));
 
-            // Tabla
             com.lowagie.text.pdf.PdfPTable table = new com.lowagie.text.pdf.PdfPTable(4);
             table.setWidthPercentage(100);
             table.addCell("Banco (BIC)");
@@ -203,9 +193,9 @@ public class CompensacionServicio {
                 com.lowagie.text.pdf.PdfPCell cellNeto = new com.lowagie.text.pdf.PdfPCell(
                         new com.lowagie.text.Phrase(p.getNeto().toString()));
                 if (p.getNeto().signum() < 0)
-                    cellNeto.setBackgroundColor(java.awt.Color.PINK); // Rojo para deudores
+                    cellNeto.setBackgroundColor(java.awt.Color.PINK);
                 else
-                    cellNeto.setBackgroundColor(java.awt.Color.CYAN); // Verde/Azul para acreedores
+                    cellNeto.setBackgroundColor(java.awt.Color.CYAN);
 
                 table.addCell(cellNeto);
             }
@@ -253,7 +243,6 @@ public class CompensacionServicio {
             primerCiclo.setFechaApertura(LocalDateTime.now(java.time.ZoneOffset.UTC));
             CicloCompensacion guardado = cicloRepo.save(primerCiclo);
 
-            // Iniciar timer por defecto de 10 min para el primer ciclo
             programarCierreAutomatico(guardado.getId(), 10);
 
             ciclos.add(guardado);

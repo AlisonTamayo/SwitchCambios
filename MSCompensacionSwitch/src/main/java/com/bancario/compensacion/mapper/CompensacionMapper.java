@@ -36,7 +36,7 @@ public class CompensacionMapper {
                 .saldoInicial(entity.getSaldoInicial())
                 .totalDebitos(entity.getTotalDebitos())
                 .totalCreditos(entity.getTotalCreditos())
-                .neto(entity.getNeto()) // Asegurar que neto siempre se calcule o venga de DB
+                .neto(entity.getNeto())
                 .build();
     }
 
@@ -46,7 +46,7 @@ public class CompensacionMapper {
         return ArchivoDTO.builder()
                 .id(entity.getId())
                 .nombre(entity.getNombre())
-                .xmlContenido(entity.getXmlContenido()) // Cuidado si es muy grande, tal vez omitir en listas
+                .xmlContenido(entity.getXmlContenido())
                 .firmaJws(entity.getFirmaJws())
                 .canalEnvio(entity.getCanalEnvio())
                 .estado(entity.getEstado())

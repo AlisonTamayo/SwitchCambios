@@ -9,9 +9,8 @@ import java.util.Optional;
 
 @Repository
 public interface PosicionInstitucionRepositorio extends JpaRepository<PosicionInstitucion, Integer> {
-    // Buscar posición de un banco dentro de un ciclo específico
+
     Optional<PosicionInstitucion> findByCicloIdAndCodigoBic(Integer idCiclo, String codigoBic);
 
-    // Listar todas las posiciones de un ciclo
     List<PosicionInstitucion> findByCicloId(Integer idCiclo);
 }

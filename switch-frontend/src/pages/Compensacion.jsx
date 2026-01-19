@@ -18,7 +18,7 @@ export default function Compensacion() {
             const lista = res.data;
             setCiclos(lista);
 
-            // Find active cycle
+
             const activo = lista.find(c => c.estado === 'ABIERTO');
             if (activo) {
                 setCicloActivo(activo);
@@ -57,7 +57,7 @@ export default function Compensacion() {
         <div className="space-y-6">
             <h1 className="text-2xl font-bold text-gray-900">Compensación y Liquidación (Clearing)</h1>
 
-            {/* Active Cycle Panel */}
+
             <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
                 <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-indigo-50">
                     <div>
@@ -117,7 +117,7 @@ export default function Compensacion() {
                 </div>
             </div>
 
-            {/* Cycle History */}
+
             <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
                 <div className="p-6 border-b border-gray-100">
                     <h3 className="text-lg font-bold text-gray-900">Historial de Cortes</h3>

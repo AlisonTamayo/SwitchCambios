@@ -91,10 +91,6 @@ public class DirectorioServicio {
             return Optional.empty();
         String cacheKey = CACHE_KEY_PREFIX + bin;
 
-        // Intentamos obtener DTO de cache
-        // Si antes guardaba Entidad, esto podría fallar al deserializar si la clase
-        // cambió.
-        // Asumiremos cache limpio o compatible.
         Object cacheData = redisTemplate.opsForValue().get(cacheKey);
 
         if (cacheData instanceof InstitucionDTO) {

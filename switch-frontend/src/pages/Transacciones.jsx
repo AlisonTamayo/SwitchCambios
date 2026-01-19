@@ -18,7 +18,7 @@ export default function Transacciones() {
             if (filters.bic) params.bic = filters.bic;
             if (filters.estado) params.estado = filters.estado;
 
-            // Use the new endpoint created in backend step 529
+
             const response = await nucleoApi.get('/busqueda', { params });
             setResults(response.data);
         } catch (error) {
@@ -31,9 +31,9 @@ export default function Transacciones() {
 
     const handleManualPoll = async (id) => {
         try {
-            await nucleoApi.get(`/transacciones/${id}`); // Values RF-04 Active Polling internally
+            await nucleoApi.get(`/transacciones/${id}`);
             alert("Polling manual ejecutado. Verifique si el estado cambió.");
-            handleSearch({ preventDefault: () => { } }); // Refresh
+            handleSearch({ preventDefault: () => { } });
         } catch (error) {
             alert("Error en polling: " + error.message);
         }
@@ -52,7 +52,7 @@ export default function Transacciones() {
         <div className="space-y-6">
             <h1 className="text-2xl font-bold text-gray-900">Monitor de Transacciones (Traceability)</h1>
 
-            {/* Filters */}
+
             <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm">
                 <form onSubmit={handleSearch} className="grid grid-cols-1 md:grid-cols-4 gap-4">
                     <div>
@@ -102,7 +102,7 @@ export default function Transacciones() {
                 </form>
             </div>
 
-            {/* Results Table */}
+
             <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
                 <div className="overflow-x-auto">
                     <table className="w-full text-left text-sm text-gray-600">

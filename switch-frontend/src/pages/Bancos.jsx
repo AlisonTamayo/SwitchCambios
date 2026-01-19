@@ -11,7 +11,9 @@ export default function Bancos() {
         nombre: '',
         urlDestino: '',
         llavePublica: '',
-        estadoOperativo: 'ONLINE'
+        estadoOperativo: 'ONLINE',
+        prefijoBin: '',
+        agente: ''
     });
 
     useEffect(() => {
@@ -43,20 +45,23 @@ export default function Bancos() {
     const handleSubmit = async (e) => {
         e.preventDefault();
         try {
-            // Construct payload: FLAT structure matching new Java Model
+
             const payload = {
                 codigoBic: formData.codigoBic,
                 nombre: formData.nombre,
                 urlDestino: formData.urlDestino,
                 llavePublica: formData.llavePublica,
-                estadoOperativo: formData.estadoOperativo
+                estadoOperativo: formData.estadoOperativo,
+                reglasEnrutamiento: [
+                    {
+                        prefijoBin: formData.prefijoBin,
+                        agente: formData.agente
+                    }
+                ]
             };
 
-            // 1. Register in Directory (MongoDB)
-            // Using POST to register
             await directorioApi.post('/instituciones', payload);
 
-            // 2. Create Technical Account in Ledger (Postgres)
             try {
                 await contabilidadApi.post('/ledger/cuentas', { codigoBic: formData.codigoBic });
             } catch (ledgerError) {
@@ -70,7 +75,9 @@ export default function Bancos() {
                 nombre: '',
                 urlDestino: '',
                 llavePublica: '',
-                estadoOperativo: 'ONLINE'
+                estadoOperativo: 'ONLINE',
+                prefijoBin: '',
+                agente: ''
             });
             alert("Banco registrado exitosamente");
         } catch (error) {
@@ -105,8 +112,6 @@ export default function Bancos() {
                         {loading ? (
                             <tr><td colSpan="4" className="px-6 py-8 text-center text-gray-400">Cargando directorio...</td></tr>
                         ) : bancos.map((bank) => {
-                            // Backend returns _id (mongo) but frontend logic uses codigoBic
-                            // Backend returns datosTecnicos object, but table uses flat structure
                             const bic = bank._id || bank.codigoBic || 'UNKNOWN';
                             const url = bank.datosTecnicos?.urlDestino || bank.urlDestino || 'N/A';
 
@@ -119,7 +124,14 @@ export default function Bancos() {
                                             </div>
                                             <div>
                                                 <p className="font-semibold text-gray-900">{bank.nombre}</p>
-                                                <p className="text-xs text-gray-400 font-mono">{bic}</p>
+                                                <div className="flex gap-2 text-xs">
+                                                    <span className="text-gray-400 font-mono">{bic}</span>
+                                                    {bank.reglasEnrutamiento && bank.reglasEnrutamiento.length > 0 && (
+                                                        <span className="bg-indigo-50 text-indigo-700 px-1.5 rounded font-mono">
+                                                            BIN: {bank.reglasEnrutamiento[0].prefijoBin}
+                                                        </span>
+                                                    )}
+                                                </div>
                                             </div>
                                         </div>
                                     </td>
@@ -160,7 +172,7 @@ export default function Bancos() {
                 </table>
             </div>
 
-            {/* Modal */}
+
             {showModal && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
                     <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 overflow-hidden">
@@ -216,6 +228,29 @@ export default function Bancos() {
                                         onChange={e => setFormData({ ...formData, llavePublica: e.target.value })}
                                         className="w-full pl-9 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 font-mono text-xs"
                                         placeholder="KEY_..."
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Prefijo BIN</label>
+                                    <input
+                                        required
+                                        value={formData.prefijoBin}
+                                        onChange={e => setFormData({ ...formData, prefijoBin: e.target.value })}
+                                        className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 font-mono text-sm"
+                                        placeholder="Ej: 123456"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Agente</label>
+                                    <input
+                                        required
+                                        value={formData.agente}
+                                        onChange={e => setFormData({ ...formData, agente: e.target.value })}
+                                        className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500"
+                                        placeholder="Ej: CORE_BANKING"
                                     />
                                 </div>
                             </div>

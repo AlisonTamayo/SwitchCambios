@@ -53,8 +53,6 @@ export default function Dashboard() {
 
     if (loading) return <div className="p-10 text-center text-gray-400">Cargando métricas...</div>;
 
-    // Chart Data Preparation (Static hourly distribution for demo, or based on stats if available)
-    // For now we map status counts to simple chart
     const chartData = [
         { name: 'Completed', val: stats?.count_COMPLETED || 0 },
         { name: 'Failed', val: stats?.count_FAILED || 0 },
@@ -128,7 +126,7 @@ export default function Dashboard() {
                         {bancos.length === 0 && <p className="text-gray-400 text-sm text-center">No hay bancos registrados</p>}
                         {bancos.length === 0 && <p className="text-gray-400 text-sm text-center">No hay bancos registrados</p>}
                         {bancos.map((bank) => {
-                            // Safe extraction of BIC and Name
+
                             const bic = bank.codigoBic || bank.id || bank._id || 'UNKNOWN';
                             const name = bank.nombre || 'Banco Desconocido';
                             const status = bank.estadoOperativo || 'OFFLINE';
@@ -154,7 +152,7 @@ export default function Dashboard() {
                             );
                         })}
                     </div>
-                    {/* Alerts Section */}
+
                     {stats?.successRate < 90 && (
                         <div className="mt-4 p-3 bg-red-50 border border-red-100 rounded-lg flex gap-3 items-start animate-pulse">
                             <AlertTriangle className="text-red-500 shrink-0" size={18} />
