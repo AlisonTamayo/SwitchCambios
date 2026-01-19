@@ -67,6 +67,9 @@ services:
       - SPRING_DATASOURCE_USERNAME=postgres
       - SPRING_DATASOURCE_PASSWORD=admin
       - SPRING_JPA_HIBERNATE_DDL_AUTO=update
+      - SPRING_DATA_REDIS_HOST=redis-switch
+      - SPRING_DATA_REDIS_PORT=6379
+      - SPRING_DATA_REDIS_TIMEOUT=2000ms
       - URL_DIRECTORIO=http://ms-directorio:8081
       - URL_CONTABILIDAD=http://ms-contabilidad:8083
     depends_on:
