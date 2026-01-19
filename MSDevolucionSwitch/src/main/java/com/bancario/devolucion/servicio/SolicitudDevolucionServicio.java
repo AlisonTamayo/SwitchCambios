@@ -30,7 +30,9 @@ public class SolicitudDevolucionServicio {
 
         log.info("Validando motivo '{}'", req.getCodigoMotivo());
         if (!catalogoErrorRepository.existsById(req.getCodigoMotivo())) {
-            throw new RuntimeException("MOTIVO_INVALIDO: El códigoMotivo no existe en el Catálogo de Errores.");
+            log.warn("Motivo '{}' desconocido. Mapeando a MS03 para procesar la devolución.", req.getCodigoMotivo());
+            // Tolerancia: Si el motivo no existe, usamos el genérico MS03
+            req.setCodigoMotivo("MS03");
         }
 
         if (repo.existsById(req.getId())) {
