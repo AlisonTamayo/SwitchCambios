@@ -64,19 +64,40 @@ public class TransaccionServicio {
 
     @Transactional
     public TransaccionResponseDTO procesarTransaccionIso(MensajeISO iso) {
-        UUID idInstruccion = UUID.fromString(iso.getBody().getInstructionId());
-        String bicOrigen = iso.getHeader().getOriginatingBankId();
-        String bicDestino = iso.getBody().getCreditor().getTargetBankId();
-        BigDecimal monto = iso.getBody().getAmount().getValue();
-        String moneda = iso.getBody().getAmount().getCurrency();
-        String messageId = iso.getHeader().getMessageId();
-        String creationDateTime = iso.getHeader().getCreationDateTime();
-        String cuentaOrigen = iso.getBody().getDebtor().getAccountId();
-        String cuentaDestino = iso.getBody().getCreditor().getAccountId();
+        log.info(">>> ESCUDO ROBUSTO ACTIVADO v2 <<<");
+        UUID idInstruccion;
+        String bicOrigen, bicDestino, moneda, messageId, creationDateTime, cuentaOrigen, cuentaDestino;
+        BigDecimal monto;
+        String fingerprintMd5;
+        boolean debitRealizado = false;
 
-        String fingerprint = idInstruccion.toString() + monto.toString() + moneda + bicOrigen + bicDestino
-                + creationDateTime + cuentaOrigen + cuentaDestino;
-        String fingerprintMd5 = generarMD5(fingerprint);
+        try {
+            if (iso.getBody() == null || iso.getHeader() == null) {
+                throw new BusinessException("El mensaje ISO está mal formado (Header o Body nulos).");
+            }
+
+            String rawId = iso.getBody().getInstructionId();
+            idInstruccion = parseUuidSeguro(rawId);
+
+            bicOrigen = iso.getHeader().getOriginatingBankId();
+            bicDestino = iso.getBody().getCreditor().getTargetBankId();
+            monto = iso.getBody().getAmount().getValue();
+            moneda = iso.getBody().getAmount().getCurrency();
+            messageId = iso.getHeader().getMessageId();
+            creationDateTime = iso.getHeader().getCreationDateTime();
+            cuentaOrigen = iso.getBody().getDebtor().getAccountId();
+            cuentaDestino = iso.getBody().getCreditor().getAccountId();
+
+            String fingerprint = idInstruccion.toString() + monto.toString() + moneda + bicOrigen + bicDestino
+                    + creationDateTime + cuentaOrigen + cuentaDestino;
+            fingerprintMd5 = generarMD5(fingerprint);
+        } catch (NullPointerException e) {
+            log.error("Error: Datos obligatorios faltantes en el mensaje ISO.", e);
+            throw new BusinessException("Datos obligatorios faltantes en el mensaje ISO (NPE).");
+        } catch (Exception e) {
+            log.error("Error inesperado procesando datos iniciales ISO: {}", e.getMessage());
+            throw new BusinessException("Error leyendo datos del mensaje: " + e.getMessage());
+        }
 
         log.info(">>> Iniciando Tx ISO: InstID={} MsgID={} Monto={}", idInstruccion, messageId, monto);
 
@@ -160,6 +181,7 @@ public class TransaccionServicio {
 
             log.info("Ledger: Debitando {} a {}", monto, bicOrigen);
             registrarMovimientoContable(bicOrigen, idInstruccion, monto, "DEBIT");
+            debitRealizado = true;
 
             log.info("Clearing: Registrando posición Origen (Débito)");
             notificarCompensacion(bicOrigen, monto, true);
@@ -264,11 +286,15 @@ public class TransaccionServicio {
 
         } catch (BusinessException e) {
             log.error("Error de Negocio: {}", e.getMessage());
-            ejecutarReversoSaga(tx);
+            if (debitRealizado) {
+                ejecutarReversoSaga(tx);
+            }
             tx.setEstado("FAILED");
         } catch (Exception e) {
             log.error("Error crítico en Tx: {}", e.getMessage());
-            ejecutarReversoSaga(tx);
+            if (debitRealizado) {
+                ejecutarReversoSaga(tx);
+            }
             tx.setEstado("FAILED");
         }
 
@@ -445,7 +471,10 @@ public class TransaccionServicio {
 
         try {
             InstitucionDTO bancoOrigen = validarBanco(originalTx.getCodigoBicOrigen(), true);
-            String urlWebhook = bancoOrigen.getUrlDestino() + "/api/incoming/return";
+            String urlWebhook = bancoOrigen.getUrlDestino();
+            if (!urlWebhook.endsWith("/recepcion")) {
+                urlWebhook += "/api/incoming/return";
+            }
 
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
@@ -460,13 +489,12 @@ public class TransaccionServicio {
             log.warn("No se pudo notificar al Banco Origen del reverso: {}", e.getMessage());
         }
 
-        // --- NUEVO BLOQUE: Notificar al Banco Destino (Quien recibió el dinero
-        // originalmente) ---
         try {
             InstitucionDTO bancoDestino = validarBanco(originalTx.getCodigoBicDestino(), true);
-            // Asumimos que el endpoint para recibir avisos de reverso es el mismo o
-            // específico
-            String urlWebhookDestino = bancoDestino.getUrlDestino() + "/api/incoming/return";
+            String urlWebhookDestino = bancoDestino.getUrlDestino();
+            if (!urlWebhookDestino.endsWith("/recepcion")) {
+                urlWebhookDestino += "/api/incoming/return";
+            }
 
             HttpHeaders headersDestino = new HttpHeaders();
             headersDestino.setContentType(MediaType.APPLICATION_JSON);
@@ -674,6 +702,15 @@ public class TransaccionServicio {
             return hex.toString();
         } catch (Exception e) {
             throw new RuntimeException("Error generando MD5", e);
+        }
+    }
+
+    private UUID parseUuidSeguro(String rawId) {
+        try {
+            return UUID.fromString(rawId);
+        } catch (IllegalArgumentException e) {
+            log.warn("ID no estándar recibido ('{}'). Generando UUID compatible.", rawId);
+            return UUID.nameUUIDFromBytes(rawId.getBytes(StandardCharsets.UTF_8));
         }
     }
 

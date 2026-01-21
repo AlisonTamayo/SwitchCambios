@@ -69,14 +69,17 @@ public class InstitucionMapper {
         return InstitucionDTO.CircuitBreakerDTO.builder()
                 .estaAbierto(cb.isEstaAbierto())
                 .fallosConsecutivos(cb.getFallosConsecutivos())
-                .ultimoFallo(cb.getUltimoFallo())
+                .ultimoFallo(cb.getUltimoFallo() != null ? cb.getUltimoFallo().toString() : null)
                 .build();
     }
 
     private InterruptorCircuito mapCBToEntity(InstitucionDTO.CircuitBreakerDTO dto) {
         if (dto == null)
             return null;
-        return new InterruptorCircuito(dto.isEstaAbierto(), dto.getFallosConsecutivos(), dto.getUltimoFallo());
+        return new InterruptorCircuito(
+                dto.isEstaAbierto(),
+                dto.getFallosConsecutivos(),
+                dto.getUltimoFallo() != null ? java.time.LocalDateTime.parse(dto.getUltimoFallo()) : null);
     }
 
     public List<InstitucionDTO> toDTOList(List<Institucion> entities) {

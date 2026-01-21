@@ -4,7 +4,6 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import java.time.LocalDateTime;
 import java.util.List;
 
 @Data
@@ -37,6 +36,7 @@ public class InstitucionDTO {
     public static class CircuitBreakerDTO {
         private boolean estaAbierto;
         private int fallosConsecutivos;
-        private LocalDateTime ultimoFallo;
+
+        private String ultimoFallo;
     }
 }
