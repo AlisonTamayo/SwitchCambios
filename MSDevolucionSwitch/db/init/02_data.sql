@@ -6,3 +6,5 @@ INSERT INTO catalogoerror (codigo, descripcion) VALUES ('AM04', 'Fondos insufici
 INSERT INTO catalogoerror (codigo, descripcion) VALUES ('AM05', 'Duplicado');
 INSERT INTO catalogoerror (codigo, descripcion) VALUES ('MS03', 'Error tecnico en entidad destino');
 INSERT INTO catalogoerror (codigo, descripcion) VALUES ('RC01', 'Identificador de banco incorrecto');
+INSERT INTO catalogoerror (codigo, descripcion) VALUES ('AC00', 'Transaccion exitosa');
+INSERT INTO catalogoerror (codigo, descripcion) VALUES ('DUPL', 'Infraccion de Idempotencia (Duplicado)');

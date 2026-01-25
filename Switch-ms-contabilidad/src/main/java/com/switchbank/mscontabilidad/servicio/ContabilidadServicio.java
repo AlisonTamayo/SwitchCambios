@@ -181,7 +181,12 @@ public class ContabilidadServicio {
         reverso.setCuenta(cuenta);
 
         String returnIdStr = req.getBody().getReturnInstructionId();
-        reverso.setIdInstruccion(returnIdStr != null ? UUID.fromString(returnIdStr) : UUID.randomUUID());
+        UUID returnUuid = (returnIdStr != null) ? UUID.fromString(returnIdStr) : UUID.randomUUID();
+
+        if (returnUuid.equals(originalInstructionId) || !movimientoRepo.findByIdInstruccion(returnUuid).isEmpty()) {
+            returnUuid = UUID.randomUUID();
+        }
+        reverso.setIdInstruccion(returnUuid);
 
         reverso.setReferenciaId(originalInstructionId);
         reverso.setTipo(TipoMovimiento.REVERSAL);

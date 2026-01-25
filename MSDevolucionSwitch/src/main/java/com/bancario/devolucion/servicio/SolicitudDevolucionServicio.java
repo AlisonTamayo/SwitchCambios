@@ -31,7 +31,6 @@ public class SolicitudDevolucionServicio {
         log.info("Validando motivo '{}'", req.getCodigoMotivo());
         if (!catalogoErrorRepository.existsById(req.getCodigoMotivo())) {
             log.warn("Motivo '{}' desconocido. Mapeando a MS03 para procesar la devolución.", req.getCodigoMotivo());
-            // Tolerancia: Si el motivo no existe, usamos el genérico MS03
             req.setCodigoMotivo("MS03");
         }
 
@@ -47,11 +46,13 @@ public class SolicitudDevolucionServicio {
         e.setFechaSolicitud(OffsetDateTime.now());
 
         SolicitudDevolucion saved = repo.save(e);
+        log.info("Devolución creada exitosamente: {}", saved.getId());
         return mapper.toDTO(saved);
     }
 
     @Transactional(readOnly = true)
     public SolicitudDevolucionDTO getById(UUID id) {
+        log.info("Consultando devolución por ID: {}", id);
         SolicitudDevolucion e = repo.findById(id)
                 .orElseThrow(() -> new RuntimeException("DEVOLUCION_NOT_FOUND: Solicitud no encontrada."));
         return mapper.toDTO(e);
@@ -59,6 +60,7 @@ public class SolicitudDevolucionServicio {
 
     @Transactional(readOnly = true)
     public List<SolicitudDevolucionDTO> findByOriginal(UUID idInstruccionOriginal) {
+        log.info("Buscando devoluciones para instrucción original: {}", idInstruccionOriginal);
         List<SolicitudDevolucion> list = repo.findByIdInstruccionOriginal(idInstruccionOriginal);
         return mapper.toSolicitudList(list);
     }

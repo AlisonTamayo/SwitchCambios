@@ -37,6 +37,7 @@ public class DirectorioServicio {
     public InstitucionDTO registrarInstitucion(@NonNull InstitucionDTO dto) {
 
         Institucion institucion = mapper.toEntity(dto);
+        log.info("Registrando nueva institución: {}", dto.getCodigoBic());
 
         if (institucion.getCodigoBic() == null) {
             throw new IllegalArgumentException("El codigoBic no puede ser nulo");
@@ -63,6 +64,7 @@ public class DirectorioServicio {
     }
 
     public Optional<InstitucionDTO> buscarPorBic(String bic) {
+        log.info("Buscando Institución por BIC: {}", bic);
         if (bic == null)
             return Optional.empty();
 
@@ -87,6 +89,7 @@ public class DirectorioServicio {
     }
 
     public Optional<InstitucionDTO> descubrirBancoPorBin(String bin) {
+        log.info("Resolviendo BIN: {}", bin);
         if (bin == null)
             return Optional.empty();
         String cacheKey = CACHE_KEY_PREFIX + bin;
@@ -107,6 +110,7 @@ public class DirectorioServicio {
     }
 
     public void registrarFallo(String bic) {
+        log.warn("Registrando fallo operativo para: {}", bic);
         if (bic == null)
             return;
 

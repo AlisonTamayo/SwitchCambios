@@ -8,11 +8,11 @@ export default function Compensacion() {
     const [posiciones, setPosiciones] = useState([]);
     const [loading, setLoading] = useState(true);
     const [uptime, setUptime] = useState('');
-    const [duracionProximo, setDuracionProximo] = useState(10); // Default 10 min
+    const [duracionProximo, setDuracionProximo] = useState(10);
 
     useEffect(() => {
         loadData();
-        const interval = setInterval(loadData, 10000); // Polling cada 10s
+        const interval = setInterval(loadData, 10000);
         return () => clearInterval(interval);
     }, []);
 
@@ -32,17 +32,12 @@ export default function Compensacion() {
 
     const loadData = async () => {
         try {
-            // FIX: Using relative path. baseURL in client.js + Kong Config handles the rest.
-            // Client BaseURL: .../compensacion
-            // Kong maps /compensacion -> http://ms-compensacion:8084/api/v1
-            // So we just need to append the resource path relative to the MS root.
             const res = await compensacionApi.get('/compensacion/ciclos');
             const lista = res.data;
             setCiclos(lista);
 
             const activo = lista.find(c => c.estado === 'ABIERTO');
             if (activo) {
-                // Si cambió el ciclo activo, recargar posiciones
                 if (!cicloActivo || cicloActivo.id !== activo.id) {
                     setCicloActivo(activo);
                     loadPosiciones(activo.id);
@@ -69,7 +64,6 @@ export default function Compensacion() {
     const handleCierre = async () => {
         if (!cicloActivo) return;
 
-        // AUTOMATIZACIÓN: No preguntar tiempo. Usar default 10 min.
         const minInt = 10;
 
         if (window.confirm(`¿Seguro que deseas cerrar el Ciclo #${cicloActivo.numeroCiclo} ahora?`)) {
@@ -78,7 +72,6 @@ export default function Compensacion() {
                 alert(`✅ Ciclo #${cicloActivo.numeroCiclo} CERRADO. Siguiente en ${minInt} min.`);
                 loadData();
             } catch (error) {
-                // Manejo de error mejorado para ver DEBUG INFO del backend
                 const msg = error.response?.data || error.message;
                 alert("Error al cerrar ciclo: " + msg);
             }
@@ -86,8 +79,6 @@ export default function Compensacion() {
     };
 
     const descargarPDF = (cicloId) => {
-        // Usamos la ruta relativa que pasa por Nginx -> Kong -> MS
-        // Rutas: /api (Nginx) -> /compensacion (Kong Strip) -> /compensacion (Controller)
         window.open(`/api/compensacion/compensacion/reporte/pdf/${cicloId}`, '_blank');
     };
 

@@ -39,6 +39,14 @@ public class TransaccionControlador {
             @Valid @RequestBody com.bancario.nucleo.dto.iso.MensajeISO mensajeIso) {
         log.info("Recibido mensaje ISO: {}", mensajeIso.getHeader().getMessageId());
         TransaccionResponseDTO response = transaccionServicio.procesarTransaccionIso(mensajeIso);
+
+        if ("FAILED".equals(response.getEstado())) {
+            return new ResponseEntity<>(response, HttpStatus.UNPROCESSABLE_ENTITY);
+        }
+        if ("TIMEOUT".equals(response.getEstado())) {
+            return new ResponseEntity<>(response, HttpStatus.GATEWAY_TIMEOUT);
+        }
+
         return new ResponseEntity<>(response, HttpStatus.CREATED);
     }
 

@@ -1,5 +1,6 @@
 $currentDir = Get-Location
-Write-Host ">>> INICIANDO SUBIDA DESDE: $currentDir <<<" -ForegroundColor Cyan
+$branchName = "respaldo-estable"
+Write-Host ">>> CREANDO RAMA DE RESPALDO '$branchName' DESDE: $currentDir <<<" -ForegroundColor Cyan
 
 # Mapeo: Carpeta Local -> URL Remota
 $mapping = @(
@@ -14,7 +15,6 @@ $mapping = @(
 
 foreach ($item in $mapping) {
     $folderName = $item.Path
-    $remoteUrl = $item.Url
     
     Write-Host ""
     Write-Host "-----------------------------------------------------"
@@ -23,49 +23,33 @@ foreach ($item in $mapping) {
         Write-Host "Procesando: $folderName" -ForegroundColor Yellow
         Push-Location $folderName
 
-        # 1. Inicializar Git
-        if (-not (Test-Path ".git")) {
-            Write-Host "   - Inicializando git..."
-            git init | Out-Null
-        }
+        # 1. Crear y cambiar a la rama de respaldo
+        # git checkout -B crea la rama si no existe, o la resetea si ya existe
+        Write-Host "   - Creando/Cambiando a rama '$branchName'..."
+        git checkout -B $branchName
 
-        # 2. Main Branch
-        git branch -m main 2>$null
-
-        # 3. Remote
-        $remotes = git remote -v 2>$null
-        if ($remotes -match "origin") {
-            Write-Host "   - Actualizando remoto: $remoteUrl"
-            git remote set-url origin $remoteUrl
-        }
-        else {
-            Write-Host "   - Configurando remoto: $remoteUrl"
-            git remote add origin $remoteUrl
-        }
-
-        # 4. Commit
-        Write-Host "   - Git Add All (incluyendo borrados)..."
+        # 2. Agregar cambios por si acaso (aunque ya debería estar limpio)
         git add -A 2>$null
-        
         $status = git status --porcelain
         if ($status) {
-            Write-Host "   - Git Commit..."
-            git commit -m "Funcionalidades agregadas + Funcionalidades Union" | Out-Null
-        }
-        else {
-            Write-Host "   - Nada nuevo por subir."
+            Write-Host "   - Guardando cambios pendientes..."
+            git commit -m "Backup: Punto de restauración estable" | Out-Null
         }
 
-        # 5. Push
-        Write-Host "   Subiendo a GitHub..."
-        git push -u origin main
+        # 3. Push a la nueva rama
+        Write-Host "   - Subiendo rama '$branchName' a GitHub..."
+        git push -u origin $branchName -f
         
         if ($?) {
-            Write-Host "   OK: Configurado Correctamente." -ForegroundColor Green
+            Write-Host "   OK: Respaldo subido correctamente." -ForegroundColor Green
         }
         else {
-            Write-Host "   ERROR: Fallo el push. Intenta manual: git push -f" -ForegroundColor Red
+            Write-Host "   ERROR: Fallo al subir el respaldo." -ForegroundColor Red
         }
+        
+        # Opcional: Volver a main si prefieres seguir trabajando allí
+        Write-Host "   - Regresando a 'main'..."
+        git checkout main | Out-Null
 
         Pop-Location
     }
@@ -75,4 +59,4 @@ foreach ($item in $mapping) {
 }
 
 Write-Host ""
-Write-Host ">>> FIN DEL PROCESO <<<" -ForegroundColor Cyan
+Write-Host ">>> RESPALDO COMPLETADO <<<" -ForegroundColor Cyan

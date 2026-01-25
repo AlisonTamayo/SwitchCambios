@@ -16,5 +16,5 @@ public class MovimientoDTO {
     private BigDecimal saldoResultante;
     private LocalDateTime fechaRegistro;
     private UUID referenciaId;
-    private String codigoBicCuenta; // Solo el BIC, no toda la cuenta
+    private String codigoBicCuenta;
 }

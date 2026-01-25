@@ -1,7 +1,5 @@
 import axios from 'axios';
 
-
-// Forzamos el uso de ruta relativa para que funcione con la IP pública o cualquier dominio
 const API_URL = '/api';
 
 

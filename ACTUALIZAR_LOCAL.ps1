@@ -1,5 +1,5 @@
 $currentDir = Get-Location
-Write-Host ">>> INICIANDO SUBIDA DESDE: $currentDir <<<" -ForegroundColor Cyan
+Write-Host ">>> ACTUALIZANDO REPOSITORIOS LOCALES EN: $currentDir <<<" -ForegroundColor Cyan
 
 # Mapeo: Carpeta Local -> URL Remota
 $mapping = @(
@@ -23,48 +23,31 @@ foreach ($item in $mapping) {
         Write-Host "Procesando: $folderName" -ForegroundColor Yellow
         Push-Location $folderName
 
-        # 1. Inicializar Git
+        # 1. Asegurar Remoto Correcto
         if (-not (Test-Path ".git")) {
             Write-Host "   - Inicializando git..."
             git init | Out-Null
         }
-
-        # 2. Main Branch
-        git branch -m main 2>$null
-
-        # 3. Remote
+        
         $remotes = git remote -v 2>$null
         if ($remotes -match "origin") {
-            Write-Host "   - Actualizando remoto: $remoteUrl"
+            Write-Host "   - asegurando origin -> $remoteUrl"
             git remote set-url origin $remoteUrl
         }
         else {
-            Write-Host "   - Configurando remoto: $remoteUrl"
+            Write-Host "   - configurando origin -> $remoteUrl"
             git remote add origin $remoteUrl
         }
 
-        # 4. Commit
-        Write-Host "   - Git Add All (incluyendo borrados)..."
-        git add -A 2>$null
-        
-        $status = git status --porcelain
-        if ($status) {
-            Write-Host "   - Git Commit..."
-            git commit -m "Funcionalidades agregadas + Funcionalidades Union" | Out-Null
-        }
-        else {
-            Write-Host "   - Nada nuevo por subir."
-        }
-
-        # 5. Push
-        Write-Host "   Subiendo a GitHub..."
-        git push -u origin main
+        # 2. Hacer Pull
+        Write-Host "   - Trayendo cambios (git pull)..."
+        git pull origin main
         
         if ($?) {
-            Write-Host "   OK: Configurado Correctamente." -ForegroundColor Green
+            Write-Host "   OK: Actualizado." -ForegroundColor Green
         }
         else {
-            Write-Host "   ERROR: Fallo el push. Intenta manual: git push -f" -ForegroundColor Red
+            Write-Host "   ERROR: Fallo el pull. Revisa si tienes conflictos locales." -ForegroundColor Red
         }
 
         Pop-Location
@@ -75,4 +58,4 @@ foreach ($item in $mapping) {
 }
 
 Write-Host ""
-Write-Host ">>> FIN DEL PROCESO <<<" -ForegroundColor Cyan
+Write-Host ">>> ACTUALIZACION COMPLETADA <<<" -ForegroundColor Cyan

@@ -22,7 +22,7 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorDTO> handleGenericException(Exception ex, HttpServletRequest request) {
         log.error("Unhandled Exception: ", ex);
-        return buildResponse(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "Ha ocurrido un error inesperado",
+        return buildResponse(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "Error Interno: " + ex.toString(),
                 request);
     }
 

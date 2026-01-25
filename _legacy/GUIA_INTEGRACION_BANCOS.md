@@ -94,7 +94,23 @@ Cuando su sistema reciba este POST, debe:
 
 ---
 
-## 5. Checklist para el Éxito (Nexus y Ecusol)
+## 5. (NUEVO) Requisito para RF-04: Consulta de Estado
+
+Para cumplir con la normativa de consistencia, **SU BANCO DEBE EXPONER UN ENDPOINT DE CONSULTA**.
+El Switch llamará a este endpoint si no recibe respuesta de su parte en una transferencia anterior.
+
+*   **Endpoint que USTEDES deben crear:** `/status/{instructionId}` (Relativo a su URL base)
+*   **Método:** `GET`
+*   **Respuesta Esperada:**
+```json
+{
+  "estado": "COMPLETED" // O "FAILED", "PENDING"
+}
+```
+
+**Si no implementan esto, el Switch asumirá que cualquier transacción dudosa falló y les descontará el dinero (Reverso).**
+
+## 6. Checklist para el Éxito (Nexus y Ecusol)
 
 Para evitar errores comunes (`500 Internal Server Error`, `Timeouts`), verifique:
 

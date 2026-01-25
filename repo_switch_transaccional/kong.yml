@@ -9,7 +9,7 @@ services:
   - name: frontend-nucleo
     url: http://ms-nucleo:8082/api/v1/transacciones
     routes:
-      - name: fe-transacciones
+      - name: DASHBOARD-Nucleo
         paths: ["/transacciones"]
         strip_path: true
     plugins:
@@ -20,7 +20,7 @@ services:
   - name: frontend-directorio
     url: http://ms-directorio:8081/api/v1
     routes:
-      - name: fe-directorio
+      - name: DASHBOARD-Directorio
         paths: ["/directorio"]
         strip_path: true
     plugins:
@@ -31,7 +31,7 @@ services:
   - name: frontend-contabilidad
     url: http://ms-contabilidad:8083/api/v1
     routes:
-      - name: fe-contabilidad
+      - name: DASHBOARD-Contabilidad
         paths: ["/contabilidad"]
         strip_path: true
     plugins:
@@ -42,7 +42,7 @@ services:
   - name: frontend-compensacion
     url: http://ms-compensacion:8084/api/v1
     routes:
-      - name: fe-compensacion
+      - name: DASHBOARD-Compensacion
         paths: ["/compensacion"]
         strip_path: true
     plugins:
@@ -59,10 +59,16 @@ services:
   - name: v2-transfers-service
     url: http://ms-nucleo:8082/api/v1/transacciones
     routes:
-      - name: v2-transfers-route
+      - name: RF01-Transferencia-Credito
         paths: ["/api/v2/switch/transfers"]
         strip_path: true
         methods: ["GET", "POST", "OPTIONS"]
+      
+      # RF-04: Consulta de Estado (Ruta Explícita)
+      - name: RF04-Consulta-Estado
+        paths: ["~/api/v2/switch/transfers/(?<id>\\S+)$"]
+        strip_path: true
+        methods: ["GET", "OPTIONS"]
     plugins:
       - name: key-auth
         config: { key_names: ["apikey"] }
@@ -75,7 +81,7 @@ services:
   - name: v2-returns-service
     url: http://ms-nucleo:8082/api/v1/transacciones/devoluciones
     routes:
-      - name: v2-returns-route
+      - name: RF07-Devolucion-Reverso
         paths: ["/api/v2/switch/transfers/return"]
         strip_path: true
         methods: ["POST", "OPTIONS"]
@@ -91,7 +97,7 @@ services:
   - name: v2-funding-service
     url: http://ms-contabilidad:8083/api/v1/ledger/cuentas
     routes:
-      - name: v2-funding-route
+      - name: RF01-1-Fondeo
         paths: ["/funding"]
         strip_path: true
         methods: ["GET", "OPTIONS"]

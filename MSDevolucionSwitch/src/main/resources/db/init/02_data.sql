@@ -1,0 +1,10 @@
+INSERT INTO catalogoerror (codigo, descripcion) VALUES ('AC01', 'Numero de cuenta incorrecto') ON CONFLICT (codigo) DO NOTHING;
+INSERT INTO catalogoerror (codigo, descripcion) VALUES ('AC04', 'Cuenta cerrada') ON CONFLICT (codigo) DO NOTHING;
+INSERT INTO catalogoerror (codigo, descripcion) VALUES ('AC06', 'Cuenta bloqueada') ON CONFLICT (codigo) DO NOTHING;
+INSERT INTO catalogoerror (codigo, descripcion) VALUES ('AG01', 'Transaccion prohibida') ON CONFLICT (codigo) DO NOTHING;
+INSERT INTO catalogoerror (codigo, descripcion) VALUES ('AM04', 'Fondos insuficientes') ON CONFLICT (codigo) DO NOTHING;
+INSERT INTO catalogoerror (codigo, descripcion) VALUES ('AM05', 'Duplicado') ON CONFLICT (codigo) DO NOTHING;
+INSERT INTO catalogoerror (codigo, descripcion) VALUES ('MS03', 'Error tecnico en entidad destino') ON CONFLICT (codigo) DO NOTHING;
+INSERT INTO catalogoerror (codigo, descripcion) VALUES ('RC01', 'Identificador de banco incorrecto') ON CONFLICT (codigo) DO NOTHING;
+INSERT INTO catalogoerror (codigo, descripcion) VALUES ('AC00', 'Transaccion exitosa') ON CONFLICT (codigo) DO NOTHING;
+INSERT INTO catalogoerror (codigo, descripcion) VALUES ('DUPL', 'Infraccion de Idempotencia (Duplicado)') ON CONFLICT (codigo) DO NOTHING;

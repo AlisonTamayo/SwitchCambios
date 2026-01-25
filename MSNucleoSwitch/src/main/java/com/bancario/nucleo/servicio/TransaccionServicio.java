@@ -73,7 +73,8 @@ public class TransaccionServicio {
 
         try {
             if (iso.getBody() == null || iso.getHeader() == null) {
-                throw new BusinessException("El mensaje ISO está mal formado (Header o Body nulos).");
+                throw new BusinessException(IsoError.RC01.getCodigo() + " - " + IsoError.RC01.getDescripcion()
+                        + ": Header o Body son nulos.");
             }
 
             String rawId = iso.getBody().getInstructionId();
@@ -88,15 +89,25 @@ public class TransaccionServicio {
             cuentaOrigen = iso.getBody().getDebtor().getAccountId();
             cuentaDestino = iso.getBody().getCreditor().getAccountId();
 
+            if (!"USD".equalsIgnoreCase(moneda)) {
+                throw new BusinessException(IsoError.AC03.getCodigo() + " - Moneda no soportada: " + moneda);
+            }
+            if (monto.compareTo(new BigDecimal("10000")) > 0) {
+                throw new BusinessException(
+                        IsoError.CH03.getCodigo() + " - Monto excede el límite permitido (Max: 10,000 USD)");
+            }
+
             String fingerprint = idInstruccion.toString() + monto.toString() + moneda + bicOrigen + bicDestino
                     + creationDateTime + cuentaOrigen + cuentaDestino;
             fingerprintMd5 = generarMD5(fingerprint);
         } catch (NullPointerException e) {
             log.error("Error: Datos obligatorios faltantes en el mensaje ISO.", e);
-            throw new BusinessException("Datos obligatorios faltantes en el mensaje ISO (NPE).");
+            throw new BusinessException(
+                    IsoError.RC01.getCodigo() + " - Datos obligatorios faltantes en el mensaje ISO (NPE).");
         } catch (Exception e) {
             log.error("Error inesperado procesando datos iniciales ISO: {}", e.getMessage());
-            throw new BusinessException("Error leyendo datos del mensaje: " + e.getMessage());
+            throw new BusinessException(
+                    IsoError.MS03.getCodigo() + " - Error leyendo datos del mensaje: " + e.getMessage());
         }
 
         log.info(">>> Iniciando Tx ISO: InstID={} MsgID={} Monto={}", idInstruccion, messageId, monto);
@@ -116,6 +127,7 @@ public class TransaccionServicio {
         }
 
         if (Boolean.TRUE.equals(claimed)) {
+            log.info("Idempotencia: Nueva transacción detectada (Redis Claim). Procesando...");
             log.info("Redis CLAIM OK (o Fallback DB) — Nueva transacción {}", idInstruccion);
         } else {
             String existingVal = null;
@@ -175,9 +187,11 @@ public class TransaccionServicio {
             String bin = (cuentaDestino != null && cuentaDestino.length() >= 6) ? cuentaDestino.substring(0, 6)
                     : "000000";
             validarEnrutamientoBin(bin, bicDestino);
+            log.info("Enrutamiento: BIN {} mapeado correctamente a {}", bin, bicDestino);
 
             validarBanco(bicOrigen, false);
             InstitucionDTO bancoDestinoInfo = validarBanco(bicDestino, true);
+            log.info("Validación: Bancos Origen ({}) y Destino ({}) operativos.", bicOrigen, bicDestino);
 
             log.info("Ledger: Debitando {} a {}", monto, bicOrigen);
             registrarMovimientoContable(bicOrigen, idInstruccion, monto, "DEBIT");
@@ -228,12 +242,13 @@ public class TransaccionServicio {
                         notificarCompensacion(bicDestino, monto, false);
 
                         entregado = true;
+                        log.info("Entrega: CONFIRMADA al Banco Destino. Finalizando Tx.");
                         break;
 
                     } catch (io.github.resilience4j.circuitbreaker.CallNotPermittedException e) {
                         log.error("CIRCUIT BREAKER ABIERTO para {}. Transaccion rechazada inmediatamente.", bicDestino);
-                        throw new BusinessException("MS03 - El Banco Destino " + bicDestino
-                                + " está NO DISPONIBLE (Circuit Breaker Activo).");
+                        throw new BusinessException(IsoError.MS03.getCodigo() + " - El Banco Destino " + bicDestino
+                                + " está NO DISPONIBLE (Circuit Breaker Activo). Intente más tarde.");
                     }
                 } catch (BusinessException e) {
                     throw e;
@@ -242,7 +257,7 @@ public class TransaccionServicio {
                     String isoCode = normalizadorErrores.normalizarError(errorBody);
                     log.error("Rechazo Normalizado del Banco Destino: {} -> {}", errorBody, isoCode);
 
-                    throw new BusinessException("Transacción Rechazada (" + isoCode + "): " + errorBody);
+                    throw new BusinessException(isoCode + " - Transacción Rechazada por Banco Destino: " + errorBody);
 
                 } catch (org.springframework.web.client.HttpServerErrorException e) {
                     log.error("Error 5xx del Banco Destino: {}", e.getStatusCode());
@@ -250,7 +265,7 @@ public class TransaccionServicio {
 
                     String isoCode = IsoError.MS03.getCodigo();
                     throw new BusinessException(
-                            "Banco Destino falló internamente (" + isoCode + "): " + e.getStatusCode());
+                            isoCode + " - Banco Destino falló internamente (HTTP 5xx). Código: " + e.getStatusCode());
 
                 } catch (org.springframework.web.client.ResourceAccessException e) {
                     log.error("Timeout/Conexión fallida con Banco Destino: {}", e.getMessage());
@@ -277,9 +292,7 @@ public class TransaccionServicio {
                 throw new java.util.concurrent.TimeoutException("No se obtuvo respuesta del Banco Destino");
             }
 
-        } catch (
-
-        java.util.concurrent.TimeoutException e) {
+        } catch (java.util.concurrent.TimeoutException e) {
             log.error("Transacción en estado PENDING por Timeout: {}", e.getMessage());
             throw new org.springframework.web.server.ResponseStatusException(
                     org.springframework.http.HttpStatus.GATEWAY_TIMEOUT, "Tiempo de espera agotado con Banco Destino");
@@ -304,7 +317,8 @@ public class TransaccionServicio {
 
     public TransaccionResponseDTO obtenerTransaccion(UUID id) {
         Transaccion tx = transaccionRepositorio.findById(id)
-                .orElseThrow(() -> new BusinessException("Transacción no encontrada"));
+                .orElseThrow(() -> new BusinessException(
+                        IsoError.RC01.getCodigo() + " - Transacción no encontrada con ID: " + id));
 
         if ("PENDING".equals(tx.getEstado()) || "RECEIVED".equals(tx.getEstado()) || "TIMEOUT".equals(tx.getEstado())) {
 
@@ -366,17 +380,20 @@ public class TransaccionServicio {
         String originalId = returnRequest.getBody().getOriginalInstructionId();
 
         if (originalId == null || originalId.isBlank()) {
-            throw new BusinessException("El campo 'originalInstructionId' es obligatorio.");
+            throw new BusinessException(
+                    IsoError.RC01.getCodigo() + " - El campo 'originalInstructionId' es obligatorio.");
         }
 
         try {
             UUID.fromString(originalId);
         } catch (IllegalArgumentException e) {
-            throw new BusinessException("El 'originalInstructionId' no tiene un formato UUID válido: " + originalId);
+            throw new BusinessException(IsoError.RC01.getCodigo()
+                    + " - El 'originalInstructionId' no tiene un formato UUID válido: " + originalId);
         }
 
         Transaccion originalTxCheck = transaccionRepositorio.findById(UUID.fromString(originalId))
-                .orElseThrow(() -> new BusinessException("Transacción original no encontrada en Switch"));
+                .orElseThrow(() -> new BusinessException(IsoError.RC01.getCodigo()
+                        + " - Transacción original no encontrada en Switch (ID=" + originalId + ")"));
 
         if ("REVERSED".equals(originalTxCheck.getEstado())) {
             log.warn("RF-03 Idempotencia: Transacción {} ya está REVERSED. Retornando éxito sin reprocesar.",
@@ -408,10 +425,19 @@ public class TransaccionServicio {
             return "RETURN_ALREADY_PROCESSED";
         }
 
+        if (originalId.equals(returnId.replace("RET-", "").replace("MSG-", "")) || originalId.equals(returnId)) {
+            String safeUuid = UUID.randomUUID().toString();
+            log.info("Sanitizando ID de Retorno: {} -> {}", returnId, safeUuid);
+
+            returnId = safeUuid;
+            returnRequest.getBody().setReturnInstructionId(safeUuid);
+            returnRequest.getHeader().setMessageId("RET-" + safeUuid);
+        }
+
         String urlDevolucionCreate = devolucionUrl + "/api/v1/devoluciones";
-        UUID returnUuid = UUID.fromString(returnId.replace("RET-", "").replace("MSG-", ""));
+        UUID returnUuid;
         try {
-            returnUuid = UUID.fromString(returnId);
+            returnUuid = UUID.fromString(returnId.replace("RET-", "").replace("MSG-", ""));
         } catch (IllegalArgumentException e) {
             returnUuid = UUID.randomUUID();
         }
@@ -429,10 +455,12 @@ public class TransaccionServicio {
         } catch (HttpClientErrorException e) {
             log.error("MS-Devoluciones rechazó el registro (Motivo Inválido?): {}", e.getResponseBodyAsString());
             throw new BusinessException(
-                    "Error de validación legal del motivo (MS-Devolucion): " + e.getResponseBodyAsString());
+                    IsoError.RC01.getCodigo() + " - Error de validación legal del motivo (MS-Devolucion): "
+                            + e.getResponseBodyAsString());
         } catch (Exception e) {
             log.error("Error contactando MS-Devoluciones: {}", e.getMessage());
-            throw new BusinessException("Servicio de Auditoría de Devoluciones no disponible.");
+            throw new BusinessException(
+                    IsoError.MS03.getCodigo() + " - Servicio de Auditoría de Devoluciones no disponible.");
         }
 
         String urlLedger = contabilidadUrl + "/api/v1/ledger/v2/switch/transfers/return";
@@ -446,17 +474,20 @@ public class TransaccionServicio {
         } catch (HttpClientErrorException e) {
             log.error("Contabilidad rechazó el reverso: {}", e.getResponseBodyAsString());
             actualizarEstadoDevolucion(returnUuid, "FAILED");
-            throw new BusinessException("Rechazo de Contabilidad: " + e.getResponseBodyAsString());
+            throw new BusinessException(
+                    IsoError.AG01.getCodigo() + " - Rechazo de Contabilidad: " + e.getResponseBodyAsString());
         } catch (Exception e) {
             log.error("Error de comunicación con Contabilidad: {}", e.getMessage());
             actualizarEstadoDevolucion(returnUuid, "FAILED");
-            throw new BusinessException("Error de comunicación con Contabilidad: " + e.getMessage());
+            throw new BusinessException(
+                    IsoError.MS03.getCodigo() + " - Error de comunicación con Contabilidad: " + e.getMessage());
         }
 
         actualizarEstadoDevolucion(returnUuid, estadoFinalDevolucion);
 
         Transaccion originalTx = transaccionRepositorio.findById(UUID.fromString(originalId))
-                .orElseThrow(() -> new BusinessException("Transacción original no encontrada en Switch"));
+                .orElseThrow(() -> new BusinessException(
+                        IsoError.RC01.getCodigo() + " - Transacción original no encontrada (Post-Validación)"));
 
         originalTx.setEstado("REVERSED");
         transaccionRepositorio.save(originalTx);
@@ -512,7 +543,42 @@ public class TransaccionServicio {
                     e.getMessage());
         }
 
+        registrarTransaccionDeRetorno(returnRequest, returnUuid,
+                "REVERSED".equals(estadoFinalDevolucion) ? "COMPLETED" : "FAILED");
         return responseLedger;
+    }
+
+    private void registrarTransaccionDeRetorno(ReturnRequestDTO returnRequest, UUID returnUuid, String estado) {
+        try {
+            Transaccion tx = new Transaccion();
+            tx.setIdInstruccion(returnUuid);
+            tx.setIdMensaje(returnRequest.getHeader().getMessageId());
+
+            String bicOrigen = returnRequest.getHeader().getOriginatingBankId();
+
+            String originalId = returnRequest.getBody().getOriginalInstructionId();
+            transaccionRepositorio.findById(UUID.fromString(originalId)).ifPresent(original -> {
+                tx.setCodigoBicDestino(original.getCodigoBicOrigen());
+            });
+            if (tx.getCodigoBicDestino() == null) {
+                tx.setCodigoBicDestino("UNKNOWN");
+            }
+
+            tx.setCodigoBicOrigen(bicOrigen);
+            tx.setMonto(returnRequest.getBody().getReturnAmount().getValue());
+            tx.setMoneda(returnRequest.getBody().getReturnAmount().getCurrency());
+
+            String rawRef = tx.getMonto().toString() + bicOrigen + tx.getIdMensaje() + LocalDateTime.now();
+            tx.setReferenciaRed(generarMD5(rawRef).toUpperCase());
+
+            tx.setEstado(estado);
+            tx.setFechaCreacion(LocalDateTime.now(java.time.ZoneOffset.UTC));
+
+            transaccionRepositorio.save(tx);
+            log.info("Refund registrado como Transacción: {}", returnUuid);
+        } catch (Exception e) {
+            log.warn("No se pudo registrar la transacción de Refund para visualización: {}", e.getMessage());
+        }
     }
 
     private InstitucionDTO validarBanco(String bic, boolean permitirSoloRecibir) {
@@ -521,24 +587,28 @@ public class TransaccionServicio {
             InstitucionDTO banco = restTemplate.getForObject(url, InstitucionDTO.class);
 
             if (banco == null)
-                throw new BusinessException("Banco no encontrado: " + bic);
+                throw new BusinessException(IsoError.AC01.getCodigo() + " - Banco no encontrado en Directorio: " + bic);
 
             if ("SUSPENDIDO".equalsIgnoreCase(banco.getEstadoOperativo())
-                    || "MANT".equalsIgnoreCase(banco.getEstadoOperativo())) {
-                throw new BusinessException("El banco " + bic + " se encuentra en MANTENIMIENTO/SUSPENDIDO.");
+                    || "MANT".equalsIgnoreCase(banco.getEstadoOperativo())
+                    || "OFFLINE".equalsIgnoreCase(banco.getEstadoOperativo())) {
+                throw new BusinessException(IsoError.MS03.getCodigo() + " - El banco " + bic
+                        + " se encuentra en NO DISPONIBLE (Mantenimiento/Offline).");
             }
             if ("SOLO_RECIBIR".equalsIgnoreCase(banco.getEstadoOperativo()) && !permitirSoloRecibir) {
-                throw new BusinessException(
-                        "El banco " + bic + " está en modo SOLO_RECIBIR y no puede iniciar transferencias.");
+                throw new BusinessException(IsoError.AG01.getCodigo() + " - El banco " + bic
+                        + " está en modo SOLO_RECIBIR y no puede iniciar transferencias.");
             }
 
             return banco;
         } catch (HttpClientErrorException.NotFound e) {
-            throw new BusinessException("El banco " + bic + " no existe.");
+            throw new BusinessException(
+                    IsoError.AC01.getCodigo() + " - El banco " + bic + " no existe o no está registrado.");
         } catch (Exception e) {
             if (e instanceof BusinessException)
                 throw (BusinessException) e;
-            throw new BusinessException("Error validando banco " + bic + ": " + e.getMessage());
+            throw new BusinessException(
+                    IsoError.MS03.getCodigo() + " - Error técnico validando banco " + bic + ": " + e.getMessage());
         }
     }
 
@@ -549,24 +619,28 @@ public class TransaccionServicio {
 
             if (bancoPropietario == null) {
                 throw new BusinessException(
-                        "BE01 - Routing Error: Cuenta destino desconocida (BIN " + bin + " no registrado)");
+                        IsoError.BE01.getCodigo() + " - Routing Error: Cuenta destino desconocida (BIN " + bin
+                                + " no registrado)");
             }
 
             if (!bancoPropietario.getCodigoBic().equals(bicDestinoEsperado)) {
                 log.error("Routing Mismatch: Cuenta {} pertenece a {} pero mensaje dirigido a {}", bin,
                         bancoPropietario.getCodigoBic(), bicDestinoEsperado);
-                throw new BusinessException("BE01 - Routing Error: La cuenta destino no pertenece al banco indicado.");
+                throw new BusinessException(IsoError.BE01.getCodigo()
+                        + " - Routing Error: La cuenta destino no pertenece al banco indicado.");
             }
 
         } catch (HttpClientErrorException.NotFound e) {
             throw new BusinessException(
-                    "BE01 - Routing Error: Cuenta destino desconocida (BIN " + bin + " no registrado)");
+                    IsoError.BE01.getCodigo() + " - Routing Error: Cuenta destino desconocida (BIN " + bin
+                            + " no registrado)");
         } catch (Exception e) {
             if (e instanceof BusinessException)
                 throw (BusinessException) e;
             log.warn("Error validando BIN (Non-blocking warning or blocking depending on strictness): {}",
                     e.getMessage());
-            throw new BusinessException("Error Técnico Validando Enrutamiento: " + e.getMessage());
+            throw new BusinessException(
+                    IsoError.MS03.getCodigo() + " - Error Técnico Validando Enrutamiento: " + e.getMessage());
         }
     }
 
@@ -583,9 +657,11 @@ public class TransaccionServicio {
             restTemplate.postForEntity(url, req, Object.class);
 
         } catch (HttpClientErrorException.BadRequest e) {
-            throw new BusinessException("Error contable para " + bic + ": Fondos insuficientes o integridad violada.");
+            throw new BusinessException(IsoError.AM04.getCodigo() + " - Error contable para " + bic
+                    + ": Fondos insuficientes o integridad violada.");
         } catch (Exception e) {
-            throw new BusinessException("Error crítico con Contabilidad: " + e.getMessage());
+            throw new BusinessException(
+                    IsoError.MS03.getCodigo() + " - Error crítico con Contabilidad: " + e.getMessage());
         }
     }
 
@@ -628,12 +704,64 @@ public class TransaccionServicio {
     private void ejecutarReversoSaga(Transaccion tx) {
         try {
             log.warn("SAGA COMPENSACIÓN: Iniciando reverso local para Tx {}", tx.getIdInstruccion());
-            registrarMovimientoContable(tx.getCodigoBicOrigen(), tx.getIdInstruccion(), tx.getMonto(), "CREDIT");
+
+            UUID reversalId = UUID.randomUUID();
+            log.info("Saga ID Mapping: Original {} -> ReversalLedgerID {}", tx.getIdInstruccion(), reversalId);
+
+            registrarMovimientoContable(tx.getCodigoBicOrigen(), reversalId, tx.getMonto(), "CREDIT");
             notificarCompensacion(tx.getCodigoBicOrigen(), tx.getMonto(), false);
+
+            notificarReversoAlBancoOrigen(tx);
 
             log.info("SAGA COMPENSACIÓN: Reverso completado exitosamente.");
         } catch (Exception e) {
             log.error("CRITICAL: Fallo en Saga de Reverso. Inconsistencia Contable posible. {}", e.getMessage());
+        }
+    }
+
+    private void notificarReversoAlBancoOrigen(Transaccion tx) {
+        try {
+            InstitucionDTO bancoOrigen = validarBanco(tx.getCodigoBicOrigen(), true);
+            String urlWebhook = bancoOrigen.getUrlDestino();
+            if (!urlWebhook.endsWith("/recepcion")) {
+                urlWebhook = urlWebhook.replace("/transferencias/recepcion", "") + "/api/incoming/return";
+            } else {
+                urlWebhook += "/return";
+            }
+
+            ReturnRequestDTO aviso = new ReturnRequestDTO();
+
+            ReturnRequestDTO.Header header = new ReturnRequestDTO.Header();
+            header.setMessageId("REV-" + UUID.randomUUID().toString());
+            header.setCreationDateTime(LocalDateTime.now().toString());
+            header.setOriginatingBankId("SWITCH");
+            aviso.setHeader(header);
+
+            ReturnRequestDTO.Body body = new ReturnRequestDTO.Body();
+            body.setOriginalInstructionId(tx.getIdInstruccion().toString());
+            body.setReturnReason(IsoError.MS03.getCodigo());
+
+            ReturnRequestDTO.Amount monto = new ReturnRequestDTO.Amount();
+            monto.setValue(tx.getMonto());
+            monto.setCurrency(tx.getMoneda());
+            body.setReturnAmount(monto);
+
+            aviso.setBody(body);
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            if (bancoOrigen.getLlavePublica() != null) {
+                headers.set("apikey", bancoOrigen.getLlavePublica());
+            }
+
+            log.info("Notificando REVERSO AUTÓNOMO a {}: {}", bancoOrigen.getNombre(), urlWebhook);
+            HttpEntity<ReturnRequestDTO> request = new HttpEntity<>(aviso, headers);
+
+            restTemplate.postForEntity(urlWebhook, request, String.class);
+            log.info("Notificación de reverso enviada OK.");
+
+        } catch (Exception e) {
+            log.warn("No se pudo notificar el reverso al Banco Origen: {}", e.getMessage());
         }
     }
 

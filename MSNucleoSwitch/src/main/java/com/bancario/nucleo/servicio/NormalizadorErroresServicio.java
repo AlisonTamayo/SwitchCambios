@@ -22,7 +22,8 @@ public class NormalizadorErroresServicio {
         mapaErroresConocidos.put("Cuenta Cerrada", IsoError.AC04);
         mapaErroresConocidos.put("Cte Cerrada", IsoError.AC04);
         mapaErroresConocidos.put("Account Not Found", IsoError.AC04);
-        mapaErroresConocidos.put("AC01", IsoError.AC04);
+        mapaErroresConocidos.put("AC01", IsoError.AC01);
+        mapaErroresConocidos.put("DUPL", IsoError.DUPL);
         mapaErroresConocidos.put("999", IsoError.MS03);
         mapaErroresConocidos.put("System Error", IsoError.MS03);
         mapaErroresConocidos.put("TIMEOUT", IsoError.MS03);

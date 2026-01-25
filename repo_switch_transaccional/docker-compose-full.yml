@@ -8,6 +8,8 @@ services:
       - MONGO_INITDB_ROOT_USERNAME=admin
       - MONGO_INITDB_ROOT_PASSWORD=admin
     ports: [ "27017:27017" ]
+    volumes:
+      - mongo_data:/data/db
     healthcheck:
       test: [ "CMD-SHELL", "mongosh", "--eval", "db.adminCommand('ping')" ]
       interval: 5s
@@ -17,6 +19,8 @@ services:
     container_name: redis-switch
     ports: [ "6379:6379" ]
     command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis_data:/data
     healthcheck:
       test: [ "CMD", "redis-cli", "ping" ]
       interval: 5s
@@ -50,6 +54,8 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: admin
     ports: [ "5434:5432" ]
+    volumes:
+      - nucleo_pg_data:/var/lib/postgresql/data
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U postgres" ]
       interval: 5s
@@ -87,6 +93,8 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: admin
     ports: [ "5435:5432" ]
+    volumes:
+      - contabilidad_pg_data:/var/lib/postgresql/data
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U postgres" ]
       interval: 5s
@@ -119,6 +127,8 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: admin
     ports: [ "5436:5432" ]
+    volumes:
+      - compensacion_pg_data:/var/lib/postgresql/data
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U postgres" ]
       interval: 5s
@@ -151,6 +161,8 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: admin
     ports: [ "5437:5432" ]
+    volumes:
+      - devolucion_pg_data:/var/lib/postgresql/data
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U postgres -d devolucion" ]
       interval: 5s
@@ -242,6 +254,12 @@ services:
       - ms-compensacion
 
 volumes:
+  mongo_data:
+  redis_data:
+  nucleo_pg_data:
+  contabilidad_pg_data:
+  compensacion_pg_data:
+  devolucion_pg_data:
   caddy_data:
   caddy_config:
 
