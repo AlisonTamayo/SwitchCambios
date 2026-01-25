@@ -61,25 +61,118 @@ Para enviar una transferencia, utilice el endpoint estándar `pacs.008`.
 
 ---
 
-## 3. UX: Guía de Estados y Polling (Para Banca Móvil)
+## 2.1 Implementación de Idempotencia y Reintentos (CRÍTICO)
 
-**PROBLEMA CRÍTICO:** La respuesta `201 Created` es asíncrona. Si usted le dice a su cliente "Éxito" inmediatamente, puede crear falsos positivos.
+Para evitar duplicidad de cobros cuando la red falla o el usuario presiona "Enviar" múltiples veces, su Banco **DEBE** implementar la lógica de reintento con el mismo ID.
 
-**SOLUCIÓN (Patrón Optimistic UI + Polling):**
-Su Backend debe implementar una espera activa antes de confirmar al Frontend.
+### Regla de Oro: "Un Clic = Un ID"
 
-### Algoritmo de Implementación
-1.  Envía la transacción (`POST`). Recibe 201.
-2.  Inicia un bucle `while` de 10 intentos (esperando 1.5s entre cada uno).
-3.  En cada intento, consulta: `GET /api/v2/switch/transfers/{instructionId}`.
-4.  Analiza el campo `estado`:
+1.  **Generación:** Cuando el usuario inicia la intención de pago, su Backend debe generar un `instructionId` (UUID) **único**.
+2.  **Persistencia Temporal:** Guarde este UUID asociada a la sesión o intento de pago actual del usuario.
+3.  **Manejo de Error (Timeout/Network Error):**
+    *   Si su petición al Switch falla por TIMEOUT o ERROR DE RED (no recibe respuesta HTTP):
+    *   **NO genere un UUID nuevo.**
+    *   **Reenvíe (Retry)** exactamente el mismo JSON con el **MISMO `instructionId`**.
+4.  **Comportamiento del Switch:**
+    *   Al recibir el mismo ID, el Switch detectará el duplicado y le devolverá la respuesta original (Éxito o Fallo) sin volver a debitar ni duplicar la operación.
 
-| Estado | Significado | Acción en App Móvil |
-| :--- | :--- | :--- |
-| **RECEIVED / PENDING** | Switch contactando destino. | ⏳ Mostrar Spinner "Procesando..." |
-| **COMPLETED** | Dinero acreditado en destino. | ✅ Pantalla Verde "¡Transferencia Exitosa!" |
-| **FAILED / REJECTED** | Rechazo técnico o de negocio. | ❌ Pantalla Roja + Devolver dinero al cliente. |
-| **TIMEOUT** (Tras 15s) | Red lenta. | ⚠️ "Operación en proceso. Le notificaremos." |
+**Ejemplo Incorrecto (Genera Duplicados):**
+*   Intento 1: ID `A1` -> Falla Red
+*   Intento 2: ID `B2` -> Switch procesa nueva Tx (Cobro Doble ❌)
+
+**Ejemplo Correcto (Idempotente):**
+*   Intento 1: ID `A1` -> Falla Red
+*   Intento 2: ID `A1` -> Switch recupera respuesta de ID `A1` (Cobro Único ✅)
+
+---
+
+---
+
+## 3. UX: Guía de Implementación "Pantalla de Procesando" (Nivel Profesional)
+
+Para evitar la incertidumbre del usuario ("¿Llegó mi dinero?"), su App Móvil/Web **NO** debe mostrar "Enviado exitosamente" solo con el 201 del Switch. Debe implementar una **Pantalla de Espera Activa**.
+
+### Máquina de Estados Visual (UI State Machine)
+
+El banco debe orquestar los siguientes estados visuales en la pantalla del cliente:
+
+#### Estado A: "Iniciando..." (0s - 1s)
+*   **Evento:** Usuario hace clic en "Enviar".
+*   **Acción:** Backend genera UUID y envía `POST` al Switch.
+*   **UI:** Spinner girando. Bloquear botón "Atrás". Texto: *"Conectando con la red..."*
+
+#### Estado B: "Validando en Destino..." (1s - 15s)
+*   **Evento:** Switch responde `201 Created` (Todo OK por ahora).
+*   **Acción Crítica:** **NO** confirme éxito aún. Inicie **Polling** (Consulta repetitiva).
+*   **Polling:** Llame a `GET /api/v2/switch/transfers/{instructionId}` cada 1.5 segundos.
+*   **UI:** Spinner girando. Texto cambiante: *"Verificando cuenta destino..."* -> *"Confirmando fondos..."*.
+
+#### Estado C: Resolución Final (Éxito)
+*   **Evento:** Polling recibe `estado: "COMPLETED"`.
+*   **UI:**
+    *   ✅ Animación de Check Verde y vibración háptica.
+    *   Texto: *"¡Transferencia Exitosa!"*
+    *   Mostrar Nro. Comprobante (mismo `instructionId`).
+    *   **Acción:** Redirigir al recibo o saldo.
+
+#### Estado D: Resolución Final (Fallo/Rechazo)
+*   **Evento:** Polling recibe `estado: "FAILED"` o `"REJECTED"`.
+*   **UI:**
+    *   ❌ Icono de Error Rojo.
+    *   Texto: *"No se pudo realizar la transferencia"*.
+    *   **Subtítulo (CRÍTICO):** Mostrar el mensaje amigable del [Catálogo de Errores](#8-apéndice-b-catálogo-maestro-de-errores-iso-20022).
+    *   **Acción:** Desbloquear pantalla. Devolver el dinero al saldo en la vista del cliente.
+
+#### Estado E: Tiempo de Espera Agotado (Timeout)
+*   **Evento:** Pasan 15 segundos sin respuesta final (Sigue `PENDING`).
+*   **UI:**
+    *   ⚠️ Icono Amarillo/Reloj.
+    *   Texto: *"La operación está tardando más de lo normal"*.
+    *   Subtítulo: *"Estamos validando el estado final. Le notificaremos por SMS en breve."*
+    *   **Importante:** No diga "Falló" ni "Éxito". Diga "En Proceso".
+
+---
+
+### Ejemplo de Código (Pseudo-Frontend)
+
+```javascript
+async function realizarTransferencia(datos) {
+  // 1. UI: Bloquear Pantalla
+  setPantalla("PROCESANDO_SPINNER");
+  
+  try {
+    // 2. Enviar (Fase 1)
+    const tx = await api.post('/switch/transfers', datos);
+    const id = datos.instructionId; // Recordar: Un clic = Un ID
+    
+    // 3. Polling (Fase 2) - Máximo 10 intentos
+    let intentos = 0;
+    while (intentos < 10) {
+      await esperar(1500); // 1.5 seg
+      const estado = await api.get(`/switch/transfers/${id}`); // Consulta al RF-04
+      
+      if (estado.status === 'COMPLETED') {
+        setPantalla("EXITO_CHECK_VERDE"); // ✅ FIN FELIZ
+        return;
+      }
+      
+      if (estado.status === 'FAILED') {
+        mostrarError(estado.motivo); // ❌ FIN TRISTE (Con mensaje real)
+        return;
+      }
+      
+      intentos++;
+    }
+    
+    // 4. Timeout
+    setPantalla("PENDIENTE_AMARILLA"); // ⚠️ INCERTIDUMBRE
+    
+  } catch (error) {
+    if (error.esRed) reintentarMismoId(); // Idempotencia automática
+    else mostrarError("Error de conexión");
+  }
+}
+```
 
 ---
 
