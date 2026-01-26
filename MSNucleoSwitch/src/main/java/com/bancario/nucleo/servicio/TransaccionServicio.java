@@ -89,14 +89,6 @@ public class TransaccionServicio {
             cuentaOrigen = iso.getBody().getDebtor().getAccountId();
             cuentaDestino = iso.getBody().getCreditor().getAccountId();
 
-            if (!"USD".equalsIgnoreCase(moneda)) {
-                throw new BusinessException(IsoError.AC03.getCodigo() + " - Moneda no soportada: " + moneda);
-            }
-            if (monto.compareTo(new BigDecimal("10000")) > 0) {
-                throw new BusinessException(
-                        IsoError.CH03.getCodigo() + " - Monto excede el límite permitido (Max: 10,000 USD)");
-            }
-
             String fingerprint = idInstruccion.toString() + monto.toString() + moneda + bicOrigen + bicDestino
                     + creationDateTime + cuentaOrigen + cuentaDestino;
             fingerprintMd5 = generarMD5(fingerprint);
@@ -108,6 +100,14 @@ public class TransaccionServicio {
             log.error("Error inesperado procesando datos iniciales ISO: {}", e.getMessage());
             throw new BusinessException(
                     IsoError.MS03.getCodigo() + " - Error leyendo datos del mensaje: " + e.getMessage());
+        }
+
+        if (!"USD".equalsIgnoreCase(moneda)) {
+            throw new BusinessException(IsoError.AC03.getCodigo() + " - Moneda no soportada: " + moneda);
+        }
+        if (monto.compareTo(new BigDecimal("10000")) > 0) {
+            throw new BusinessException(
+                    IsoError.CH03.getCodigo() + " - Monto excede el límite permitido (Max: 10,000 USD)");
         }
 
         log.info(">>> Iniciando Tx ISO: InstID={} MsgID={} Monto={}", idInstruccion, messageId, monto);

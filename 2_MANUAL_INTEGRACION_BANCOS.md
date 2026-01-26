@@ -185,11 +185,24 @@ Ustedes deben exponer un **Webhook** para recibir dinero.
 
 ### Contrato de Servicio
 El Switch les enviará el mismo JSON `pacs.008`. Su sistema dispone de **4 segundos** para:
-1.  Existencia de cuenta.
-2.  Abonar el dinero.
-3.  Responder `200 OK`.
 
-**⚠️ IMPORTANTE:** Si su sistema tarda >5s o responde `500`, el Switch marcará la operación como fallida y se iniciará un proceso de reverso en contra suya.
+1.  **Validar Existencia de Cuenta (CRÍTICO):** Consultar su Core Bancario.
+2.  **Abonar el dinero:** Solo si la cuenta es válida y activa.
+3.  **Responder:**
+    *   ✅ **Éxito:** `HTTP 200 OK`.
+    *   ❌ **Fallo (Cuenta No Existe):** `HTTP 404/422` con código `AC01`.
+    *   ❌ **Fallo (Cuenta Bloqueada):** `HTTP 422` con código `AG01`.
+
+**Ejemplo de Respuesta de Rechazo (Ustedes -> Switch):**
+```json
+// HTTP 404 Not Found
+{
+  "codigo": "AC01",
+  "mensaje": "Cuenta inexistente o inactiva"
+}
+```
+
+**⚠️ REGLA DE ORO:** Si ustedes responden `200 OK`, el Switch considera legalmente que el dinero fue entregado. Si responden 200 para una cuenta fantasma, tendrán un descuadre contable a su favor que deberán resolver manualmente. **¡Validen antes de responder!**
 
 ---
 
@@ -263,4 +276,31 @@ Utilice esta tabla para mapear los errores del Switch a mensajes amigables para 
 | **DUPL** | Duplicate Payment | "Esta transferencia ya fue procesada." | Consultar estado. |
 | **MS03** | Technical Failure | "Error en la red interbancaria. Intente más tarde." | Reintentar en 5 min. |
 | **RC01** | Syntax Error | "Error interno de formato." | Revisar desarrollo IT. |
+
+---
+
+## 9. Apéndice C: Manejo de Modos Operativos (Modo Drenado)
+
+El Switch permite poner a una institución en modo **"SOLO RECIBIR"** (Drenado). Esto se usa cuando un banco está en proceso de cierre o mantenimiento parcial.
+
+### Comportamiento Esperado
+*   **Si su banco está en SOLO RECIBIR:**
+    *   Usted **SÍ** puede recibir transferencias de otros.
+    *   Usted **NO** puede enviar transferencias (El Switch las rechazará).
+
+### Implementación en su Frontend
+Si intenta enviar dinero estando en este modo, el Switch devolverá:
+*   **HTTP Code:** `422 Unprocessable Entity`
+*   **ISO Code:** `AG01`
+
+**Debe mapear este error así:**
+```javascript
+case "AG01":
+    mostrarError("⚠️ OPERACIÓN RESTRINGIDA: Su institución está en modo de cierre operativo (Solo Recepción).");
+    bloquearBotonEnvio(); // Opcional
+    break;
+```
+
+**Evite mostrar "Error Técnico (MS03)" en este caso, ya que confunde al usuario.**
+
 
