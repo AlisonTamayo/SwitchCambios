@@ -29,6 +29,8 @@ import org.springframework.http.MediaType;
 
 import com.bancario.nucleo.dto.TransaccionResponseDTO;
 import com.bancario.nucleo.dto.ReturnRequestDTO;
+import com.bancario.nucleo.dto.AccountLookupRequestDTO;
+import com.bancario.nucleo.dto.AccountLookupResponseDTO;
 import com.bancario.nucleo.dto.external.InstitucionDTO;
 import com.bancario.nucleo.dto.external.RegistroMovimientoRequest;
 import com.bancario.nucleo.dto.iso.MensajeISO;
@@ -839,6 +841,55 @@ public class TransaccionServicio {
         } catch (IllegalArgumentException e) {
             log.warn("ID no estándar recibido ('{}'). Generando UUID compatible.", rawId);
             return UUID.nameUUIDFromBytes(rawId.getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
+    public AccountLookupResponseDTO validarCuentaDestino(AccountLookupRequestDTO request) {
+        log.info("Iniciando validación de cuenta (Account Lookup) para Banco: {}", request.getBody().getTargetBankId());
+
+        String targetBank = request.getBody().getTargetBankId();
+        String account = request.getBody().getTargetAccountNumber();
+
+        InstitucionDTO bancoDestino = validarBanco(targetBank, false);
+
+        Map<String, Object> header = new java.util.HashMap<>();
+        header.put("messageNamespace", "acmt.023.001.02");
+        header.put("messageId", "VAL-" + UUID.randomUUID().toString());
+        header.put("originatingBankId", "SWITCH");
+        header.put("creationDateTime", LocalDateTime.now().toString());
+
+        Map<String, Object> accountId = new java.util.HashMap<>();
+        accountId.put("accountId", account);
+
+        Map<String, Object> body = new java.util.HashMap<>();
+        body.put("accountIdentification", accountId);
+
+        Map<String, Object> isoProxyPayload = new java.util.HashMap<>();
+        isoProxyPayload.put("header", header);
+        isoProxyPayload.put("body", body);
+
+        String urlWebhook = bancoDestino.getUrlDestino();
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        if (bancoDestino.getLlavePublica() != null) {
+            headers.set("apikey", bancoDestino.getLlavePublica());
+        }
+
+        HttpEntity<Map<String, Object>> entity = new HttpEntity<>(isoProxyPayload, headers);
+
+        try {
+            log.info("Enviando solicitud acmt.023 a {}", urlWebhook);
+            return restTemplate.postForObject(urlWebhook, entity, AccountLookupResponseDTO.class);
+        } catch (Exception e) {
+            log.error("Error en validación de cuenta con banco {}: {}", targetBank, e.getMessage());
+            return AccountLookupResponseDTO.builder()
+                    .status("FAILED")
+                    .data(AccountLookupResponseDTO.LookupData.builder()
+                            .exists(false)
+                            .mensaje("Error de comunicación: " + e.getMessage())
+                            .build())
+                    .build();
         }
     }
 

@@ -75,6 +75,20 @@ services:
       - name: cors
         config: { origins: ["*"] }
 
+  # NEW: Account Lookup (Validación de Cuenta)
+  - name: v2-accounts-service
+    url: http://ms-nucleo:8082/api/v1/cuentas
+    routes:
+      - name: Account-Lookup-Service
+        paths: ["/api/v2/switch/accounts"]
+        strip_path: true
+        methods: ["POST", "OPTIONS"]
+    plugins:
+      - name: key-auth
+        config: { key_names: ["apikey"] }
+      - name: cors
+        config: { origins: ["*"] }
+
   # RF-07: Devoluciones (Returns)
   # Ruta Externa: /api/v2/switch/transfers/return
   # Ruta Interna: /api/v1/transacciones/devoluciones (NUCLEO - Para validación completa)
