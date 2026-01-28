@@ -858,12 +858,20 @@ public class TransaccionServicio {
         header.put("originatingBankId", "SWITCH");
         header.put("creationDateTime", LocalDateTime.now().toString());
 
-        Map<String, Object> accountId = new java.util.HashMap<>();
-        accountId.put("accountId", account);
-
+        // USO DE ESTRATEGIA DE COMPATIBILIDAD:
+        // En lugar de "accountIdentification" (que requiere cambios en los DTOs de los
+        // bancos),
+        // usamos "creditor" que ya existe en su MensajeISO.
         Map<String, Object> body = new java.util.HashMap<>();
-        body.put("accountIdentification", accountId);
 
+        Map<String, Object> creditor = new java.util.HashMap<>();
+        creditor.put("accountId", account);
+        // Enviamos targetBankId también por si acaso lo usan para validar routing
+        creditor.put("targetBankId", targetBank);
+
+        body.put("creditor", creditor);
+
+        // Header sigue siendo acmt.023 para indicar que es VALIDACIÓN
         Map<String, Object> isoProxyPayload = new java.util.HashMap<>();
         isoProxyPayload.put("header", header);
         isoProxyPayload.put("body", body);

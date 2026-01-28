@@ -1,11 +1,7 @@
 _format_version: "3.0"
 
 services:
-  # ==============================================================================
-  # 1. FRONTEND / DASHBOARD API (Acceso Web)
-  # ==============================================================================
-  
-  # Nucleo (Dashboard, Stats)
+
   - name: frontend-nucleo
     url: http://ms-nucleo:8082/api/v1/transacciones
     routes:
@@ -16,7 +12,6 @@ services:
       - name: cors
         config: { origins: ["*"], methods: ["GET", "POST", "OPTIONS"] }
 
-  # Directorio (Gestión Bancos)
   - name: frontend-directorio
     url: http://ms-directorio:8081/api/v1
     routes:
@@ -27,7 +22,6 @@ services:
       - name: cors
         config: { origins: ["*"], methods: ["GET", "POST", "PATCH", "OPTIONS"] }
 
-  # Contabilidad (Ledger)
   - name: frontend-contabilidad
     url: http://ms-contabilidad:8083/api/v1
     routes:
@@ -38,7 +32,6 @@ services:
       - name: cors
         config: { origins: ["*"], methods: ["GET", "POST", "OPTIONS"] }
 
-  # Compensación
   - name: frontend-compensacion
     url: http://ms-compensacion:8084/api/v1
     routes:
@@ -49,13 +42,6 @@ services:
       - name: cors
         config: { origins: ["*"], methods: ["GET", "POST", "OPTIONS"] }
 
-  # ==============================================================================
-  # 2. CONTRACT V2 (Interfaz Unificada para Bancos)
-  # ==============================================================================
-
-  # RF-01 & RF-04: Transferencias y Consultas
-  # Ruta Externa: /api/v2/switch/transfers
-  # Ruta Interna: /api/v1/transacciones
   - name: v2-transfers-service
     url: http://ms-nucleo:8082/api/v1/transacciones
     routes:
@@ -64,7 +50,6 @@ services:
         strip_path: true
         methods: ["GET", "POST", "OPTIONS"]
       
-      # RF-04: Consulta de Estado (Ruta Explícita)
       - name: RF04-Consulta-Estado
         paths: ["~/api/v2/switch/transfers/(?<id>\\S+)$"]
         strip_path: true
@@ -75,7 +60,6 @@ services:
       - name: cors
         config: { origins: ["*"] }
 
-  # NEW: Account Lookup (Validación de Cuenta)
   - name: v2-accounts-service
     url: http://ms-nucleo:8082/api/v1/cuentas
     routes:
@@ -89,9 +73,6 @@ services:
       - name: cors
         config: { origins: ["*"] }
 
-  # RF-07: Devoluciones (Returns)
-  # Ruta Externa: /api/v2/switch/transfers/return
-  # Ruta Interna: /api/v1/transacciones/devoluciones (NUCLEO - Para validación completa)
   - name: v2-returns-service
     url: http://ms-nucleo:8082/api/v1/transacciones/devoluciones
     routes:
@@ -105,9 +86,6 @@ services:
       - name: cors
         config: { origins: ["*"] }
 
-  # RF-01.1: Funding / Saldo Técnico
-  # Ruta Externa: /funding/{bankId}
-  # Ruta Interna: /api/v1/ledger/cuentas/{bic}
   - name: v2-funding-service
     url: http://ms-contabilidad:8083/api/v1/ledger/cuentas
     routes:

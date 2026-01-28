@@ -138,18 +138,38 @@ public class CompensacionServicio {
     }
 
     public void programarCierreAutomatico(Integer cicloId, int minutos) {
+        // Encontrar el ciclo para saber cuándo se abrió
+        CicloCompensacion ciclo = cicloRepo.findById(cicloId)
+                .orElseThrow(() -> new RuntimeException("Ciclo " + cicloId + " no existe para programar cierre."));
+
+        if (!"ABIERTO".equals(ciclo.getEstado())) {
+            log.info("Ciclo {} ya no está ABIERTO. Cancelando programación de cierre.", cicloId);
+            return;
+        }
 
         Runnable tareaCierre = () -> {
             try {
                 log.info(">>> EJECUTANDO CIERRE AUTOMÁTICO CICLO {}", cicloId);
 
-                realizarCierreDiario(cicloId, 10);
+                // IMPORTANTE: Al cerrar el ciclo actual automáticamente,
+                // definimos que el SIGUIENTE ciclo durará también 90 minutos.
+                realizarCierreDiario(cicloId, 90);
             } catch (Exception e) {
                 log.error("Error en cierre automático: {}", e.getMessage());
             }
         };
 
-        java.time.Instant fechaEjecucion = java.time.Instant.now().plus(java.time.Duration.ofMinutes(minutos));
+        java.time.Instant fechaAperturaInstant = ciclo.getFechaApertura().toInstant(java.time.ZoneOffset.UTC);
+        java.time.Instant fechaEjecucion = fechaAperturaInstant.plus(java.time.Duration.ofMinutes(minutos));
+
+        // Si la fecha ya pasó (ej: reinicio del server), ejecutar en 1 minuto para
+        // forzar cierre
+        if (fechaEjecucion.isBefore(java.time.Instant.now())) {
+            log.warn("El tiempo de cierre del ciclo {} ya expiró. Programando cierre inminente.", cicloId);
+            fechaEjecucion = java.time.Instant.now().plusSeconds(10);
+        }
+
+        log.info("Programando cierre automático del ciclo {} para: {}", cicloId, fechaEjecucion);
         this.scheduledTask = taskScheduler.schedule(tareaCierre, fechaEjecucion);
     }
 
@@ -243,7 +263,7 @@ public class CompensacionServicio {
             primerCiclo.setFechaApertura(LocalDateTime.now(java.time.ZoneOffset.UTC));
             CicloCompensacion guardado = cicloRepo.save(primerCiclo);
 
-            programarCierreAutomatico(guardado.getId(), 10);
+            programarCierreAutomatico(guardado.getId(), 90);
 
             ciclos.add(guardado);
         }

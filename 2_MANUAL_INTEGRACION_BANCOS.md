@@ -206,20 +206,102 @@ El Switch les enviará el mismo JSON `pacs.008`. Su sistema dispone de **4 segun
 
 ---
 
-## 5. Validación de Cuentas (Anti-Dinero Fantasma)
+## 5. Validación de Cuentas (Account Lookup / Anti-Dinero Fantasma)
 
-Es **OBLIGATORIO** que su Webhook de Recepción valide la cuenta destino de forma síncrona.
+Es **ALTAMENTE RECOMENDADO** que su banco implemente la validación previa de cuentas para mejorar la UX y reducir los rechazos `AC01`.
 
-**Escenario:** Llega transferencia para cuenta `999999` (No existe).
-**Acción Incorrecta:** Responder 200 OK y luego intentar depositar (Fallo).
-**Acción Correcta:** Responder `404 Not Found` (o 422) inmediatamente.
+### 5.1 ROL: Banco Origen (Quien pregunta)
+*Ejemplo: Usuario de ArcBank quiere pagar a alguien en Bantec.*
 
-**Tabla de Rechazos:**
-*   Cuenta Inexistente -> `404` (ISO AC01)
-*   Cuenta Cerrada -> `422` (ISO AC04)
-*   Cuenta Bloqueada -> `422` (ISO AG01)
+**Acción:** Invoca este endpoint desde tu Backend cuando el usuario pulse "Validar".
 
-Esto permite que el Switch notifique al Banco Origen instantáneamente para que reembolse al cliente.
+*   **URL:** `http://34.16.106.7:8000/api/v2/switch/accounts/lookup`
+*   **Método:** `POST`
+*   **Header:** `apikey: <TU_API_KEY>`
+
+**JSON Request:**
+```json
+{
+  "header": { "originatingBankId": "ARCBANK" },
+  "body": {
+    "targetBankId": "BANTEC",       // Banco destino seleccionado
+    "targetAccountNumber": "100050" // Cuenta ingresada
+  }
+}
+```
+
+**JSON Response (Éxito):**
+```json
+{
+  "status": "SUCCESS", 
+  "data": {
+    "exists": true,
+    "ownerName": "JUAN PEREZ", // ¡Muestra este nombre en tu App!
+    "currency": "USD",
+    "status": "ACTIVE" 
+  }
+}
+```
+
+---
+
+### 5.2 ROL: Banco Destino (Quien responde)
+*Ejemplo: Ustedes son Bantec y reciben una consulta.*
+
+**NO necesitan endpoint nuevo.** Usarán su mismo Webhook de Recepción.
+
+**JSON QUE LLEGARÁ A SU WEBHOOK:**
+El Switch enviará la cuenta dentro del objeto `creditor` (para no romper sus DTOs actuales).
+```json
+{
+  "header": {
+    "messageNamespace": "acmt.023.001.02", // IMPORTANTE: Identificador de VALIDACIÓN
+    "messageId": "VAL-12345",
+    "originatingBankId": "SWITCH"
+  },
+  "body": {
+    "creditor": { 
+        "accountId": "100050", // <--- BUSCAR ESTA CUENTA EN SU DB
+        "targetBankId": "BANTEC"
+    }
+  }
+}
+```
+
+**Lógica OBLIGATORIA en su Webhook (Java / Pseudo):**
+
+```java
+@PostMapping("/transferencias/recepcion")
+public ResponseEntity<?> recibirWebhook(@RequestBody MensajeISO mensaje) {
+
+    // 1. Detectar que es una CONSULTA (No debitar, no crear transacción)
+    if ("acmt.023.001.02".equals(mensaje.getHeader().getMessageNamespace())) {
+        
+        // 2. Extraer cuenta (Reusamos campo 'creditor' para compatibilidad)
+        String cuentaBuscada = mensaje.getBody().getCreditor().getAccountId();
+        
+        // 3. Consultar tu DB Local y Responder
+        Cliente cliente = repositorio.buscarPorCuenta(cuentaBuscada);
+        
+        if (cliente != null) {
+            return ResponseEntity.ok(Map.of(
+                "status", "SUCCESS",
+                "data", Map.of(
+                    "exists", true,
+                    "ownerName", cliente.getNombreCompleto(), 
+                    "status", "ACTIVE"
+                )
+            ));
+        } else {
+            return ResponseEntity.ok(Map.of(
+                "status", "FAILED",
+                "data", Map.of("exists", false)
+            ));
+        }
+    }
+    // ... lógica normal de pacs.008 ...
+}
+```
 
 ---
 

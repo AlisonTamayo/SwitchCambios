@@ -50,7 +50,7 @@ foreach ($item in $mapping) {
         $status = git status --porcelain
         if ($status) {
             Write-Host "   - Git Commit..."
-            git commit -m "Funcionalidades agregadas + Funcionalidades Union" | Out-Null
+            git commit -m "Funcionalidad kong validar cuenta (validar datos de la cuenta)" | Out-Null
         }
         else {
             Write-Host "   - Nada nuevo por subir."
