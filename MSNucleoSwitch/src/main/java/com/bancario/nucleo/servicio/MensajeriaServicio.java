@@ -4,6 +4,7 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import com.bancario.nucleo.config.BancoDestino;
 import com.bancario.nucleo.dto.iso.MensajeISO;
 
 import lombok.RequiredArgsConstructor;
@@ -20,23 +21,27 @@ public class MensajeriaServicio {
     private String exchangeTransfers;
 
     public void publicarTransferencia(String bicDestino, MensajeISO mensaje) {
-        String routingKey = normalizarRoutingKey(bicDestino);
+        String routingKey = validarYNormalizarRoutingKey(bicDestino);
         
-        log.info("Publicando transferencia a RabbitMQ: Exchange={}, RoutingKey={}, InstructionId={}",
-                exchangeTransfers, routingKey, mensaje.getBody().getInstructionId());
+        log.info("DIRECT EXCHANGE - Publicando transferencia");
+        log.info("  Exchange: {}, RoutingKey: {}, InstructionId: {}", 
+                 exchangeTransfers, routingKey, mensaje.getBody().getInstructionId());
 
         try {
             rabbitTemplate.convertAndSend(exchangeTransfers, routingKey, mensaje);
-            log.info("Mensaje publicado exitosamente al banco: {}", routingKey);
+            log.info("Mensaje publicado exitosamente. Destino: q.bank.{}.in", routingKey);
         } catch (Exception e) {
             log.error("Error publicando mensaje a RabbitMQ: {}", e.getMessage(), e);
             throw new RuntimeException("Error en mensajería: " + e.getMessage(), e);
         }
     }
 
-    private String normalizarRoutingKey(String bicDestino) {
+    private String validarYNormalizarRoutingKey(String bicDestino) {
         if (bicDestino == null || bicDestino.isBlank()) {
-            throw new IllegalArgumentException("BIC destino no puede ser nulo o vacío");
+            throw new IllegalArgumentException(
+                "BE01 - El routing key (creditor.targetBankId) es obligatorio. " +
+                "El banco origen debe especificar el banco destino."
+            );
         }
 
         String normalized = bicDestino.toUpperCase()
@@ -44,8 +49,13 @@ public class MensajeriaServicio {
                 .replace("_BK", "")
                 .trim();
 
-        if (!normalized.matches("NEXUS|BANTEC|ARCBANK|ECUSOL")) {
-            log.warn("BIC destino desconocido: {} -> normalizado a: {}", bicDestino, normalized);
+        if (!BancoDestino.isValid(normalized)) {
+            log.error("Routing key inválido: '{}'. Válidos: {}", 
+                      normalized, BancoDestino.getAllRoutingKeys());
+            throw new IllegalArgumentException(
+                "BE01 - Routing key inválido: '" + normalized + "'. " +
+                "Bancos destino válidos: " + BancoDestino.getAllRoutingKeys()
+            );
         }
 
         return normalized;

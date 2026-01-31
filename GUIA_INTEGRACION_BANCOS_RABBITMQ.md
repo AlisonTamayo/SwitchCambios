@@ -40,48 +40,72 @@ Este documento proporciona las instrucciones técnicas para que las entidades fi
 
 ---
 
-## 🏗️ Arquitectura del Flujo
+## 🏗️ Arquitectura del Flujo (Direct Exchange)
+
+### 🎯 Regla de Oro de RabbitMQ
+
+> ⚠️ **IMPORTANTE**: Los productores NUNCA escriben directamente en una cola. Los mensajes se envían a un **Exchange**, que decide a dónde va el mensaje basándose en el **Routing Key**.
+
+**Tipo de Exchange:** `DIRECT` (Coincidencia Exacta)
+- Si el `routingKey = "BANTEC"`, el mensaje va **SOLO** a la cola enlazada con `"BANTEC"`
+- El routing key lo define el **Banco Origen** en el campo `creditor.targetBankId`
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                              FLUJO DE TRANSFERENCIA                          │
+│           FLUJO DIRECT EXCHANGE - TRANSFERENCIA INTERBANCARIA               │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
-│   [BANCO ORIGEN]                                                             │
-│        │                                                                     │
-│        │ 1. HTTP POST /api/v1/transacciones                                  │
+│   [BANCO ORIGEN - NEXUS]                                                     │
+│        │  POST /api/v1/transacciones                                         │
+│        │  {                                                                  │
+│        │    "header": { "originatingBankId": "NEXUS" },                       │
+│        │    "body": {                                                        │
+│        │      "creditor": {                                                  │
+│        │        "targetBankId": "BANTEC"  ◄── ROUTING KEY (obligatorio)       │
+│        │      }                                                              │
+│        │    }                                                                │
+│        │  }                                                                  │
 │        ▼                                                                     │
 │   [SWITCH DIGICONECU]                                                        │
-│        │  - Valida cuentas                                                   │
-│        │  - Registra en Ledger                                               │
-│        │  - Determina destino                                                │
-│        │                                                                     │
-│        │ 2. Publica al Exchange con routingKey="BANTEC"                      │
+│        │  1. Valida mensaje ISO y cuentas                                    │
+│        │  2. Extrae routingKey = creditor.targetBankId = "BANTEC"            │
+│        │  3. Registra en Ledger                                              │
+│        │  4. Publica: rabbitTemplate.convertAndSend(exchange, "BANTEC", msg) │
 │        ▼                                                                     │
-│   [RABBITMQ - ex.transfers.tx]                                               │
-│        │                                                                     │
-│        │ 3. Enruta automáticamente                                           │
+│   [DIRECT EXCHANGE: ex.transfers.tx]                                         │
+│        │  Regla: routingKey == bindingKey → enruta                           │
+│        │  Binding: "BANTEC" → q.bank.BANTEC.in                               │
 │        ▼                                                                     │
-│   [q.bank.BANTEC.in] ◄── Su banco consume de aquí                            │
+│   [COLA: q.bank.BANTEC.in] ◄── Su banco consume de aquí                       │
 │        │                                                                     │
-│        │ 4. Banco destino procesa                                            │
+│        │  5. Banco destino procesa el depósito                               │
 │        ▼                                                                     │
-│   [BANCO DESTINO]                                                            │
+│   [BANCO DESTINO - BANTEC]                                                   │
 │        │                                                                     │
-│        │ 5. HTTP Webhook de confirmación al origen                           │
+│        │  6. HTTP Webhook de confirmación al origen                          │
 │        ▼                                                                     │
-│   [BANCO ORIGEN] ◄── Recibe confirmación                                     │
+│   [BANCO ORIGEN - NEXUS] ◄── Recibe confirmación                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Bindings del Direct Exchange
+
+| Routing Key | Cola Destino | Banco |
+|-------------|--------------|-------|
+| `NEXUS` | `q.bank.NEXUS.in` | Nexus |
+| `BANTEC` | `q.bank.BANTEC.in` | Bantec |
+| `ARCBANK` | `q.bank.ARCBANK.in` | ArcBank |
+| `ECUSOL` | `q.bank.ECUSOL.in` | Ecusol |
 
 ### Responsabilidades
 
 | Actor | Rol | Acción |
 |-------|-----|--------|
-| **Switch DIGICONECU** | Publicador | Publica mensajes al Exchange `ex.transfers.tx` |
-| **Su Banco** | Consumidor | Consume mensajes de su cola asignada `q.bank.{SU_BANCO}.in` |
-| **RabbitMQ** | Enrutador | Distribuye mensajes según routing key |
+| **Banco Origen** | Productor | Define el `routingKey` en `creditor.targetBankId` |
+| **Switch DIGICONECU** | Mediador/Publicador | Valida formato del routing key (enum `BancoDestino`) y publica al Exchange |
+| **RabbitMQ (Direct Exchange)** | Enrutador | Enruta por coincidencia exacta del routing key |
+| **Banco Destino** | Consumidor | Consume mensajes de su cola asignada `q.bank.{SU_BANCO}.in` |
 
 ---
 
@@ -144,8 +168,11 @@ spring.rabbitmq.listener.simple.retry.max-interval=5000ms
 
 ### 3. DTO de Mensaje (Estructura del Payload)
 
-El Switch enviará mensajes con la siguiente estructura ISO 20022:
+El banco origen debe enviar mensajes con la siguiente estructura ISO 20022.
 
+> ⚠️ **CAMPO OBLIGATORIO**: El campo `creditor.targetBankId` es el **ROUTING KEY** que determina a qué banco se enrutará la transacción. Si este campo está vacío o es inválido, la transacción será rechazada.
+
+#### Estructura Java
 ```java
 @Data
 public class TransferenciaDTO {
@@ -156,7 +183,7 @@ public class TransferenciaDTO {
     public static class Header {
         private String messageId;           // ID único del mensaje
         private String creationDateTime;    // Timestamp ISO 8601
-        private String originatingBankId;   // BIC del banco origen
+        private String originatingBankId;   // BIC del banco origen (quien envía)
     }
     
     @Data
@@ -187,10 +214,53 @@ public class TransferenciaDTO {
         private String name;
         private String accountId;
         private String accountType;
-        private String targetBankId;        // BIC destino
+        private String targetBankId;        // ⚠️ ROUTING KEY - BIC destino (OBLIGATORIO)
     }
 }
 ```
+
+#### Ejemplo de Mensaje JSON (Enviado por Banco Origen)
+
+```json
+{
+  "header": {
+    "messageId": "MSG-550e8400-e29b-41d4-a716-446655440000",
+    "creationDateTime": "2026-01-30T20:30:00Z",
+    "originatingBankId": "NEXUS"
+  },
+  "body": {
+    "instructionId": "550e8400-e29b-41d4-a716-446655440000",
+    "endToEndId": "REF-CLIENTE-001",
+    "amount": {
+      "currency": "USD",
+      "value": 1500.00
+    },
+    "debtor": {
+      "name": "Juan Pérez",
+      "accountId": "123456789012",
+      "accountType": "CHECKING"
+    },
+    "creditor": {
+      "name": "María García",
+      "accountId": "987654321098",
+      "accountType": "SAVINGS",
+      "targetBankId": "BANTEC"
+    },
+    "remittanceInformation": "Pago por servicios profesionales"
+  }
+}
+```
+
+#### Valores Válidos para `targetBankId` (Routing Key)
+
+| Valor | Banco Destino | Cola RabbitMQ |
+|-------|---------------|---------------|
+| `NEXUS` | Nexus | `q.bank.NEXUS.in` |
+| `BANTEC` | Bantec | `q.bank.BANTEC.in` |
+| `ARCBANK` | ArcBank | `q.bank.ARCBANK.in` |
+| `ECUSOL` | Ecusol | `q.bank.ECUSOL.in` |
+
+> 🚨 **Error BE01**: Si `targetBankId` contiene un valor no válido, el Switch rechazará la transacción con el código `BE01 - Routing key inválido`.
 
 ---
 

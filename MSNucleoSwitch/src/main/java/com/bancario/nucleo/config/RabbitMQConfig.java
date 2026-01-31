@@ -24,6 +24,9 @@ public class RabbitMQConfig {
     @Value("${rabbitmq.exchange.dlx:ex.transfers.dlx}")
     private String exchangeDlx;
 
+    @Value("${rabbitmq.queue.ttl:60000}")
+    private int queueTtl;
+
     @Bean
     public DirectExchange transferExchange() {
         return new DirectExchange(exchangeTransfers, true, false);
@@ -36,102 +39,101 @@ public class RabbitMQConfig {
 
     @Bean
     public Queue nexusQueue() {
-        return QueueBuilder.durable("q.bank.NEXUS.in")
-                .withArgument("x-dead-letter-exchange", exchangeDlx)
-                .withArgument("x-dead-letter-routing-key", "NEXUS")
-                .withArgument("x-message-ttl", 60000)
-                .build();
+        return crearColaPrincipal(BancoDestino.NEXUS);
     }
 
     @Bean
     public Queue bantecQueue() {
-        return QueueBuilder.durable("q.bank.BANTEC.in")
-                .withArgument("x-dead-letter-exchange", exchangeDlx)
-                .withArgument("x-dead-letter-routing-key", "BANTEC")
-                .withArgument("x-message-ttl", 60000)
-                .build();
+        return crearColaPrincipal(BancoDestino.BANTEC);
     }
 
     @Bean
     public Queue arcbankQueue() {
-        return QueueBuilder.durable("q.bank.ARCBANK.in")
-                .withArgument("x-dead-letter-exchange", exchangeDlx)
-                .withArgument("x-dead-letter-routing-key", "ARCBANK")
-                .withArgument("x-message-ttl", 60000)
-                .build();
+        return crearColaPrincipal(BancoDestino.ARCBANK);
     }
 
     @Bean
     public Queue ecusolQueue() {
-        return QueueBuilder.durable("q.bank.ECUSOL.in")
+        return crearColaPrincipal(BancoDestino.ECUSOL);
+    }
+
+    private Queue crearColaPrincipal(BancoDestino banco) {
+        return QueueBuilder.durable(banco.getQueueName())
                 .withArgument("x-dead-letter-exchange", exchangeDlx)
-                .withArgument("x-dead-letter-routing-key", "ECUSOL")
-                .withArgument("x-message-ttl", 60000)
+                .withArgument("x-dead-letter-routing-key", banco.getRoutingKey())
+                .withArgument("x-message-ttl", queueTtl)
                 .build();
     }
 
-
+    
     @Bean
     public Queue nexusDlq() {
-        return QueueBuilder.durable("q.bank.NEXUS.dlq").build();
+        return QueueBuilder.durable(BancoDestino.NEXUS.getDlqName()).build();
     }
 
     @Bean
     public Queue bantecDlq() {
-        return QueueBuilder.durable("q.bank.BANTEC.dlq").build();
+        return QueueBuilder.durable(BancoDestino.BANTEC.getDlqName()).build();
     }
 
     @Bean
     public Queue arcbankDlq() {
-        return QueueBuilder.durable("q.bank.ARCBANK.dlq").build();
+        return QueueBuilder.durable(BancoDestino.ARCBANK.getDlqName()).build();
     }
 
     @Bean
     public Queue ecusolDlq() {
-        return QueueBuilder.durable("q.bank.ECUSOL.dlq").build();
+        return QueueBuilder.durable(BancoDestino.ECUSOL.getDlqName()).build();
     }
 
     @Bean
     public Binding nexusBinding() {
-        return BindingBuilder.bind(nexusQueue()).to(transferExchange()).with("NEXUS");
+        return BindingBuilder.bind(nexusQueue()).to(transferExchange())
+                .with(BancoDestino.NEXUS.getRoutingKey());
     }
 
     @Bean
     public Binding bantecBinding() {
-        return BindingBuilder.bind(bantecQueue()).to(transferExchange()).with("BANTEC");
+        return BindingBuilder.bind(bantecQueue()).to(transferExchange())
+                .with(BancoDestino.BANTEC.getRoutingKey());
     }
 
     @Bean
     public Binding arcbankBinding() {
-        return BindingBuilder.bind(arcbankQueue()).to(transferExchange()).with("ARCBANK");
+        return BindingBuilder.bind(arcbankQueue()).to(transferExchange())
+                .with(BancoDestino.ARCBANK.getRoutingKey());
     }
 
     @Bean
     public Binding ecusolBinding() {
-        return BindingBuilder.bind(ecusolQueue()).to(transferExchange()).with("ECUSOL");
+        return BindingBuilder.bind(ecusolQueue()).to(transferExchange())
+                .with(BancoDestino.ECUSOL.getRoutingKey());
     }
 
     @Bean
     public Binding nexusDlqBinding() {
-        return BindingBuilder.bind(nexusDlq()).to(deadLetterExchange()).with("NEXUS");
+        return BindingBuilder.bind(nexusDlq()).to(deadLetterExchange())
+                .with(BancoDestino.NEXUS.getRoutingKey());
     }
 
     @Bean
     public Binding bantecDlqBinding() {
-        return BindingBuilder.bind(bantecDlq()).to(deadLetterExchange()).with("BANTEC");
+        return BindingBuilder.bind(bantecDlq()).to(deadLetterExchange())
+                .with(BancoDestino.BANTEC.getRoutingKey());
     }
 
     @Bean
     public Binding arcbankDlqBinding() {
-        return BindingBuilder.bind(arcbankDlq()).to(deadLetterExchange()).with("ARCBANK");
+        return BindingBuilder.bind(arcbankDlq()).to(deadLetterExchange())
+                .with(BancoDestino.ARCBANK.getRoutingKey());
     }
 
     @Bean
     public Binding ecusolDlqBinding() {
-        return BindingBuilder.bind(ecusolDlq()).to(deadLetterExchange()).with("ECUSOL");
+        return BindingBuilder.bind(ecusolDlq()).to(deadLetterExchange())
+                .with(BancoDestino.ECUSOL.getRoutingKey());
     }
-
-
+    
     @Bean
     public Jackson2JsonMessageConverter jackson2JsonMessageConverter() {
         ObjectMapper objectMapper = new ObjectMapper();
