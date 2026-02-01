@@ -46,10 +46,6 @@ public class TransaccionControlador {
         if ("TIMEOUT".equals(response.getEstado())) {
             return new ResponseEntity<>(response, HttpStatus.GATEWAY_TIMEOUT);
         }
-        // ═══════════════════════════════════════════════════════════════════════════
-        // FLUJO ASÍNCRONO: HTTP 202 Accepted para transacciones encoladas
-        // El banco origen recibirá la confirmación final vía Webhook
-        // ═══════════════════════════════════════════════════════════════════════════
         if ("QUEUED".equals(response.getEstado())) {
             log.info("Transacción {} encolada. Retornando HTTP 202 Accepted", response.getIdInstruccion());
             return new ResponseEntity<>(response, HttpStatus.ACCEPTED);

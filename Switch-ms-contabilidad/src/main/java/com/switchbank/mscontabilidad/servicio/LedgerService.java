@@ -35,7 +35,7 @@ public class LedgerService {
         }
 
         CuentaTecnica cuenta = new CuentaTecnica(req.getCodigoBic());
-        cuenta.setFirmaIntegridad(calcularHash(cuenta)); // Hash inicial
+        cuenta.setFirmaIntegridad(calcularHash(cuenta));
 
         CuentaTecnica saved = cuentaRepo.save(cuenta);
         return mapToDTO(saved);
@@ -46,15 +46,14 @@ public class LedgerService {
         CuentaTecnica cuenta = cuentaRepo.findByCodigoBic(req.getCodigoBic())
                 .orElseThrow(() -> new RuntimeException("Cuenta no encontrada para BIC: " + req.getCodigoBic()));
 
-        // 1. Validar integridad antes de operar
         String hashActual = calcularHash(cuenta);
         if (!hashActual.equals(cuenta.getFirmaIntegridad())) {
-            throw new RuntimeException("ALERTA DE SEGURIDAD: La cuenta " + req.getCodigoBic() + " ha sido alterada manualmente.");
+            throw new RuntimeException(
+                    "ALERTA DE SEGURIDAD: La cuenta " + req.getCodigoBic() + " ha sido alterada manualmente.");
         }
 
         TipoMovimiento tipo = TipoMovimiento.valueOf(req.getTipo());
 
-        // 2. Lógica de Saldo
         if (tipo == TipoMovimiento.DEBIT) {
             if (cuenta.getSaldoDisponible().compareTo(req.getMonto()) < 0) {
                 throw new RuntimeException("FONDOS INSUFICIENTES para el banco: " + req.getCodigoBic());
@@ -64,7 +63,6 @@ public class LedgerService {
             cuenta.setSaldoDisponible(cuenta.getSaldoDisponible().add(req.getMonto()));
         }
 
-        // 3. Registrar Movimiento
         Movimiento mov = new Movimiento();
         mov.setCuenta(cuenta);
         mov.setIdInstruccion(req.getIdInstruccion());
@@ -74,7 +72,6 @@ public class LedgerService {
         mov.setFechaRegistro(LocalDateTime.now());
         movimientoRepo.save(mov);
 
-        // 4. Actualizar Hash de Integridad y Guardar Cuenta
         cuenta.setFirmaIntegridad(calcularHash(cuenta));
         CuentaTecnica saved = cuentaRepo.save(cuenta);
 
@@ -88,18 +85,14 @@ public class LedgerService {
         return mapToDTO(cuenta);
     }
 
-    // --- Utilidades ---
-
     private String calcularHash(CuentaTecnica c) {
         try {
-            // CORRECCIÓN: Forzamos siempre 2 decimales (Scale 2) para evitar problemas de "0" vs "0.00"
-            // RoundingMode.HALF_UP es el estándar bancario común.
             String saldoFormateado = c.getSaldoDisponible()
                     .setScale(2, java.math.RoundingMode.HALF_UP)
                     .toString();
 
             String data = c.getCodigoBic() + ":" + saldoFormateado;
-            
+
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             byte[] hash = digest.digest(data.getBytes(StandardCharsets.UTF_8));
             return Base64.getEncoder().encodeToString(hash);
