@@ -51,6 +51,7 @@ public class TransaccionServicio {
     private final io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry circuitBreakerRegistry;
     private final TransaccionMapper transaccionMapper;
     private final NormalizadorErroresServicio normalizadorErrores;
+    private final MensajeriaServicio mensajeriaServicio;
 
     @Value("${service.directorio.url:http://ms-directorio:8081}")
     private String directorioUrl;
@@ -202,102 +203,33 @@ public class TransaccionServicio {
             log.info("Clearing: Registrando posición Origen (Débito)");
             notificarCompensacion(bicOrigen, monto, true);
 
-            int[] tiemposEspera = { 0, 800, 2000, 4000 };
-            boolean entregado = false;
-            String ultimoError = "";
-            int fallosConsecutivos = 0;
+            // ═══════════════════════════════════════════════════════════════════════════
+            // FLUJO ASÍNCRONO: Publicar a RabbitMQ en lugar de HTTP directo
+            // ═══════════════════════════════════════════════════════════════════════════
+            log.info("RabbitMQ: Publicando transferencia a cola del banco destino: {}", bicDestino);
 
-            for (int intento = 0; intento < tiemposEspera.length; intento++) {
-                if (tiemposEspera[intento] > 0) {
-                    try {
-                        Thread.sleep(tiemposEspera[intento]);
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                    }
-                }
+            try {
+                // Publicar mensaje a la cola del banco destino
+                mensajeriaServicio.publicarTransferencia(bicDestino, iso);
 
-                try {
-                    String urlWebhook = bancoDestinoInfo.getUrlDestino();
-                    log.info("Intento #{}: Enviando a {}", intento + 1, urlWebhook);
-
-                    io.github.resilience4j.circuitbreaker.CircuitBreaker cb = circuitBreakerRegistry
-                            .circuitBreaker(bicDestino);
-
-                    try {
-                        cb.executeRunnable(() -> {
-                            HttpHeaders headers = new HttpHeaders();
-                            headers.setContentType(MediaType.APPLICATION_JSON);
-                            if (bancoDestinoInfo.getLlavePublica() != null) {
-                                headers.set("apikey", bancoDestinoInfo.getLlavePublica());
-                            }
-
-                            HttpEntity<MensajeISO> request = new HttpEntity<>(iso, headers);
-                            restTemplate.postForEntity(urlWebhook, request, String.class);
-                        });
-
-                        log.info("Webhook: Entregado exitosamente.");
-
-                        log.info("Ledger: Acreditando {} a {}", monto, bicDestino);
-                        registrarMovimientoContable(bicDestino, idInstruccion, monto, "CREDIT");
-
-                        log.info("Clearing: Registrando posición Destino (Crédito)");
-                        notificarCompensacion(bicDestino, monto, false);
-
-                        entregado = true;
-                        log.info("Entrega: CONFIRMADA al Banco Destino. Finalizando Tx.");
-                        break;
-
-                    } catch (io.github.resilience4j.circuitbreaker.CallNotPermittedException e) {
-                        log.error("CIRCUIT BREAKER ABIERTO para {}. Transaccion rechazada inmediatamente.", bicDestino);
-                        throw new BusinessException(IsoError.MS03.getCodigo() + " - El Banco Destino " + bicDestino
-                                + " está NO DISPONIBLE (Circuit Breaker Activo). Intente más tarde.");
-                    }
-                } catch (BusinessException e) {
-                    throw e;
-                } catch (HttpClientErrorException e) {
-                    String errorBody = e.getResponseBodyAsString();
-                    String isoCode = normalizadorErrores.normalizarError(errorBody);
-                    log.error("Rechazo Normalizado del Banco Destino: {} -> {}", errorBody, isoCode);
-
-                    throw new BusinessException(isoCode + " - Transacción Rechazada por Banco Destino: " + errorBody);
-
-                } catch (org.springframework.web.client.HttpServerErrorException e) {
-                    log.error("Error 5xx del Banco Destino: {}", e.getStatusCode());
-                    reportarFalloAlDirectorio(bicDestino, "HTTP_5XX");
-
-                    String isoCode = IsoError.MS03.getCodigo();
-                    throw new BusinessException(
-                            isoCode + " - Banco Destino falló internamente (HTTP 5xx). Código: " + e.getStatusCode());
-
-                } catch (org.springframework.web.client.ResourceAccessException e) {
-                    log.error("Timeout/Conexión fallida con Banco Destino: {}", e.getMessage());
-                    reportarFalloAlDirectorio(bicDestino, "TIMEOUT_CONEXION");
-                    ultimoError = "Timeout/Conexión: " + e.getMessage();
-
-                } catch (Exception e) {
-                    log.warn("Fallo intento #{}: {}", intento + 1, e.getMessage());
-                    circuitBreakerRegistry.circuitBreaker(bicDestino).onError(0, java.util.concurrent.TimeUnit.SECONDS,
-                            e);
-                    ultimoError = e.getMessage();
-                }
-            }
-
-            if (entregado) {
-                tx.setEstado("COMPLETED");
-                guardarRespaldoIdempotencia(tx, "EXITO");
-            } else {
-                log.error("TIMEOUT: Se agotaron los reintentos. Último error: {}", ultimoError);
-                log.error("TIMEOUT: Se agotaron los reintentos. Último error: {}", ultimoError);
-                tx.setEstado("TIMEOUT");
+                // Marcar como encolado (el resultado final llegará vía callback)
+                tx.setEstado("QUEUED");
                 transaccionRepositorio.save(tx);
 
-                throw new java.util.concurrent.TimeoutException("No se obtuvo respuesta del Banco Destino");
-            }
+                log.info("═══════════════════════════════════════════════════════════════════════════");
+                log.info("FLUJO ASÍNCRONO: Mensaje encolado exitosamente");
+                log.info("  InstructionId: {}", idInstruccion);
+                log.info("  Estado: QUEUED (esperando callback del banco destino)");
+                log.info("  Cola destino: q.bank.{}.in", bicDestino);
+                log.info("═══════════════════════════════════════════════════════════════════════════");
 
-        } catch (java.util.concurrent.TimeoutException e) {
-            log.error("Transacción en estado PENDING por Timeout: {}", e.getMessage());
-            throw new org.springframework.web.server.ResponseStatusException(
-                    org.springframework.http.HttpStatus.GATEWAY_TIMEOUT, "Tiempo de espera agotado con Banco Destino");
+                guardarRespaldoIdempotencia(tx, "ENCOLADO");
+
+            } catch (Exception e) {
+                log.error("Error publicando a RabbitMQ: {}", e.getMessage());
+                throw new BusinessException(
+                        IsoError.MS03.getCodigo() + " - Error en cola de mensajería: " + e.getMessage());
+            }
 
         } catch (BusinessException e) {
             log.error("Error de Negocio: {}", e.getMessage());

@@ -1,21 +1,157 @@
 # 🐰 Guía de Integración de Bancos con RabbitMQ
-## Switch Transaccional DIGICONECU - Sistema de Colas
+## Switch Transaccional DIGICONECU - Sistema de Colas Asíncrono
 
 ---
 
 ## 📋 Resumen Ejecutivo
 
-Este documento proporciona las instrucciones técnicas para que las entidades financieras participantes se integren con el sistema de mensajería asíncrona del Switch DIGICONECU utilizando **Amazon MQ (RabbitMQ)**.
+Este documento proporciona las instrucciones técnicas para que las entidades financieras participantes se integren con el sistema de mensajería **asíncrona** del Switch DIGICONECU utilizando **Amazon MQ (RabbitMQ)**.
 
 **Beneficios de la integración:**
 - ✅ **Alta disponibilidad**: Mensajes persistentes garantizan entrega incluso durante mantenimiento
-- ✅ **Desacoplamiento**: Sin dependencia de disponibilidad instantánea
+- ✅ **Desacoplamiento**: Sin dependencia de disponibilidad instantánea del banco destino
 - ✅ **Resiliencia**: Reintentos automáticos con backoff exponencial
 - ✅ **Auditoría**: Trazabilidad completa de mensajes
+- ✅ **Asincronía**: El banco origen recibe respuesta inmediata (202 Accepted)
 
 ---
 
-## 🔐 Credenciales de Conexión
+## 🔄 Cambio de Arquitectura: Síncrono → Asíncrono
+
+### ❌ Flujo ANTERIOR (Síncrono)
+```
+Banco Origen ──HTTP──► Switch ──HTTP──► Banco Destino
+                          ◄──────────────── HTTP 200
+                ◄──HTTP 201 Created────
+                
+⏳ Banco origen BLOQUEADO esperando respuesta (1-10 segundos)
+```
+
+### ✅ Flujo ACTUAL (Asíncrono)
+```
+Banco Origen ──HTTP──► Switch ──HTTP 202 Accepted──► Banco Origen (LIBRE!)
+                          │
+                          ▼ RabbitMQ
+                    q.bank.BANTEC.in
+                          │
+                          ▼
+                    Banco Destino consume
+                          │
+                          ▼ HTTP POST /callback
+                       Switch
+                          │
+                          ▼ HTTP POST webhook
+                    Banco Origen (recibe confirmación)
+                    
+✅ Banco origen recibe 202 INMEDIATAMENTE (~100ms)
+✅ Confirmación llega después vía Webhook
+```
+
+---
+
+## 🏗️ Arquitectura Completa del Flujo Asíncrono
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                              FLUJO ASÍNCRONO COMPLETO - 5 PASOS                                                 │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                                                 │
+│  ╔═══════════════════════╗                                                                                      │
+│  ║     BANCO ORIGEN      ║                                                                                      │
+│  ║       (NEXUS)         ║                                                                                      │
+│  ║  Webhook configurado  ║                                                                                      │
+│  ║  en el Directorio     ║                                                                                      │
+│  ╚═══════════╤═══════════╝                                                                                      │
+│              │                                                                                                  │
+│              │ ① HTTP POST pacs.008 (ISO 20022)                                                                 │
+│              │    { header: { originatingBankId: "NEXUS" },                                                     │
+│              │      body: { creditor: { targetBankId: "BANTEC" } } }                                            │
+│              ▼                                                                                                  │
+│  ╔═══════════════════════════════════════════════════════════════════════════════════════════════════╗         │
+│  ║                                        SWITCH DIGICONECU                                          ║         │
+│  ║                                                                                                   ║         │
+│  ║   1. Valida mensaje ISO 20022                                                                     ║         │
+│  ║   2. Valida bancos en Directorio                                                                  ║         │
+│  ║   3. Registra DEBIT en Ledger (quita $ al banco origen)                                          ║         │
+│  ║   4. Publica mensaje a cola: rabbitTemplate.convertAndSend("ex.transfers.tx", "BANTEC", msg)     ║         │
+│  ║   5. Retorna HTTP 202 Accepted INMEDIATAMENTE                                                     ║         │
+│  ║                                                                                                   ║         │
+│  ╚═══════════════════════════════════════════════════════════════════════════════════════════════════╝         │
+│              │                                                                                                  │
+│              │ ② HTTP 202 Accepted (INMEDIATO, ~100ms)                                                          │
+│              │    { idInstruccion: "uuid", estado: "QUEUED", mensaje: "Transferencia encolada" }                │
+│              ▼                                                                                                  │
+│  ╔═══════════════════════╗                                                                                      │
+│  ║     BANCO ORIGEN      ║                                                                                      │
+│  ║       (NEXUS)         ║                                                                                      │
+│  ║                       ║                                                                                      │
+│  ║  ✅ LIBRE para hacer  ║                                                                                      │
+│  ║     otras operaciones ║                                                                                      │
+│  ╚═══════════════════════╝                                                                                      │
+│                                                                                                                 │
+│              ┌─────────────────────────────────────────────────────────────────────────────┐                    │
+│              │                           RabbitMQ (Amazon MQ)                              │                    │
+│              │                                                                             │                    │
+│              │   ┌───────────────────────────┐                                             │                    │
+│              │   │     ex.transfers.tx       │   (Direct Exchange)                         │                    │
+│              │   └─────────────┬─────────────┘                                             │                    │
+│              │                 │ routingKey = "BANTEC"                                     │                    │
+│              │                 ▼                                                           │                    │
+│              │   ┌───────────────────────────┐                                             │                    │
+│              │   │    q.bank.BANTEC.in       │   ◄── Los bancos consumen de aquí          │                    │
+│              │   └─────────────┬─────────────┘                                             │                    │
+│              │                 │                                                           │                    │
+│              └─────────────────┼───────────────────────────────────────────────────────────┘                    │
+│                                │                                                                                │
+│                                │ ③ @RabbitListener consume mensaje                                              │
+│                                ▼                                                                                │
+│  ╔═══════════════════════════════════════════════════════════════════════════════════════════════════╗         │
+│  ║                                     BANCO DESTINO (BANTEC)                                        ║         │
+│  ║                                                                                                   ║         │
+│  ║   @RabbitListener(queues = "q.bank.BANTEC.in")                                                    ║         │
+│  ║   public void procesarTransferencia(MensajeISO mensaje) {                                         ║         │
+│  ║       1. Extraer datos de la transferencia                                                        ║         │
+│  ║       2. Validar cuenta destino existe                                                            ║         │
+│  ║       3. Validar cuenta no bloqueada                                                              ║         │
+│  ║       4. Procesar depósito en Core Bancario                                                       ║         │
+│  ║       5. Enviar resultado AL SWITCH vía HTTP POST /callback                                       ║         │
+│  ║   }                                                                                               ║         │
+│  ║                                                                                                   ║         │
+│  ╚═══════════════════════════════════════════════════════════════════════════════════════════════════╝         │
+│                                │                                                                                │
+│                                │ ④ HTTP POST /api/v1/transacciones/callback                                     │
+│                                │    { header: { respondingBankId: "BANTEC" },                                   │
+│                                │      body: { originalInstructionId: "uuid", status: "COMPLETED" } }            │
+│                                ▼                                                                                │
+│  ╔═══════════════════════════════════════════════════════════════════════════════════════════════════╗         │
+│  ║                                        SWITCH DIGICONECU                                          ║         │
+│  ║                                                                                                   ║         │
+│  ║   CallbackServicio.procesarCallback()                                                             ║         │
+│  ║   1. Actualiza estado de tx a COMPLETED                                                           ║         │
+│  ║   2. Registra CREDIT en Ledger (da $ al banco destino)                                           ║         │
+│  ║   3. Busca webhook del banco origen en Directorio                                                 ║         │
+│  ║   4. Envía HTTP POST con resultado al banco origen                                                ║         │
+│  ║                                                                                                   ║         │
+│  ╚═══════════════════════════════════════════════════════════════════════════════════════════════════╝         │
+│                                │                                                                                │
+│                                │ ⑤ HTTP POST pacs.002 (StatusReport) al Webhook del banco origen               │
+│                                │    { body: { originalInstructionId: "uuid", status: "COMPLETED" } }            │
+│                                ▼                                                                                │
+│  ╔═══════════════════════╗                                                                                      │
+│  ║     BANCO ORIGEN      ║                                                                                      │
+│  ║       (NEXUS)         ║                                                                                      │
+│  ║                       ║                                                                                      │
+│  ║  ✅ Recibe resultado  ║                                                                                      │
+│  ║  ✅ Notifica cliente  ║                                                                                      │
+│  ║  ✅ TX completada     ║                                                                                      │
+│  ╚═══════════════════════╝                                                                                      │
+│                                                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🔐 Credenciales de Conexión RabbitMQ
 
 | Parámetro | Valor |
 |-----------|-------|
@@ -40,142 +176,116 @@ Este documento proporciona las instrucciones técnicas para que las entidades fi
 
 ---
 
-## 🏗️ Arquitectura del Flujo (Direct Exchange)
+## 📦 Lo que debe implementar cada Banco
 
-### 🎯 Regla de Oro de RabbitMQ
+### Resumen de Responsabilidades
 
-> ⚠️ **IMPORTANTE**: Los productores NUNCA escriben directamente en una cola. Los mensajes se envían a un **Exchange**, que decide a dónde va el mensaje basándose en el **Routing Key**.
-
-**Tipo de Exchange:** `DIRECT` (Coincidencia Exacta)
-- Si el `routingKey = "BANTEC"`, el mensaje va **SOLO** a la cola enlazada con `"BANTEC"`
-- El routing key lo define el **Banco Origen** en el campo `creditor.targetBankId`
-
-```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│           FLUJO DIRECT EXCHANGE - TRANSFERENCIA INTERBANCARIA               │
-├──────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│   [BANCO ORIGEN - NEXUS]                                                     │
-│        │  POST /api/v1/transacciones                                         │
-│        │  {                                                                  │
-│        │    "header": { "originatingBankId": "NEXUS" },                       │
-│        │    "body": {                                                        │
-│        │      "creditor": {                                                  │
-│        │        "targetBankId": "BANTEC"  ◄── ROUTING KEY (obligatorio)       │
-│        │      }                                                              │
-│        │    }                                                                │
-│        │  }                                                                  │
-│        ▼                                                                     │
-│   [SWITCH DIGICONECU]                                                        │
-│        │  1. Valida mensaje ISO y cuentas                                    │
-│        │  2. Extrae routingKey = creditor.targetBankId = "BANTEC"            │
-│        │  3. Registra en Ledger                                              │
-│        │  4. Publica: rabbitTemplate.convertAndSend(exchange, "BANTEC", msg) │
-│        ▼                                                                     │
-│   [DIRECT EXCHANGE: ex.transfers.tx]                                         │
-│        │  Regla: routingKey == bindingKey → enruta                           │
-│        │  Binding: "BANTEC" → q.bank.BANTEC.in                               │
-│        ▼                                                                     │
-│   [COLA: q.bank.BANTEC.in] ◄── Su banco consume de aquí                       │
-│        │                                                                     │
-│        │  5. Banco destino procesa el depósito                               │
-│        ▼                                                                     │
-│   [BANCO DESTINO - BANTEC]                                                   │
-│        │                                                                     │
-│        │  6. HTTP Webhook de confirmación al origen                          │
-│        ▼                                                                     │
-│   [BANCO ORIGEN - NEXUS] ◄── Recibe confirmación                              │
-│                                                                              │
-└──────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Bindings del Direct Exchange
-
-| Routing Key | Cola Destino | Banco |
-|-------------|--------------|-------|
-| `NEXUS` | `q.bank.NEXUS.in` | Nexus |
-| `BANTEC` | `q.bank.BANTEC.in` | Bantec |
-| `ARCBANK` | `q.bank.ARCBANK.in` | ArcBank |
-| `ECUSOL` | `q.bank.ECUSOL.in` | Ecusol |
-
-### Responsabilidades
-
-| Actor | Rol | Acción |
-|-------|-----|--------|
-| **Banco Origen** | Productor | Define el `routingKey` en `creditor.targetBankId` |
-| **Switch DIGICONECU** | Mediador/Publicador | Valida formato del routing key (enum `BancoDestino`) y publica al Exchange |
-| **RabbitMQ (Direct Exchange)** | Enrutador | Enruta por coincidencia exacta del routing key |
-| **Banco Destino** | Consumidor | Consume mensajes de su cola asignada `q.bank.{SU_BANCO}.in` |
+| # | Tarea | Protocolo | Descripción |
+|---|-------|-----------|-------------|
+| 1 | **Consumir de cola** | RabbitMQ | `@RabbitListener(queues = "q.bank.{BIC}.in")` |
+| 2 | **Procesar transferencia** | Interno | Validar cuenta, depositar fondos |
+| 3 | **Notificar al Switch** | HTTP POST | `POST /api/v1/transacciones/callback` |
 
 ---
 
-## ⚙️ Configuración Técnica
+## 🛠️ Implementación Paso a Paso
 
-### 1. Dependencias (Maven/Gradle)
+### Paso 1: Dependencias Maven
 
-**Maven (`pom.xml`):**
 ```xml
-<dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-amqp</artifactId>
-</dependency>
-```
-
-**Gradle (`build.gradle`):**
-```groovy
-implementation 'org.springframework.boot:spring-boot-starter-amqp'
+<!-- pom.xml -->
+<dependencies>
+    <!-- Spring AMQP para RabbitMQ -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-amqp</artifactId>
+    </dependency>
+    
+    <!-- WebClient para HTTP al Switch -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-webflux</artifactId>
+    </dependency>
+    
+    <!-- Jackson para serialización JSON -->
+    <dependency>
+        <groupId>com.fasterxml.jackson.datatype</groupId>
+        <artifactId>jackson-datatype-jsr310</artifactId>
+    </dependency>
+</dependencies>
 ```
 
 ---
 
-### 2. Configuración `application.properties`
+### Paso 2: Configuración `application.yml`
 
-```properties
-# ========================================
-# CONFIGURACION RABBITMQ (Amazon MQ)
-# ========================================
-spring.rabbitmq.host=b-455e546c-be71-4fe2-ba0f-bd3112e6c220.mq.us-east-2.on.aws
-spring.rabbitmq.port=5671
-spring.rabbitmq.username=${RABBITMQ_USER}
-spring.rabbitmq.password=${RABBITMQ_PASSWORD}
-spring.rabbitmq.virtual-host=/
+```yaml
+spring:
+  rabbitmq:
+    # ═══════════════════════════════════════════════════════════════
+    # CONEXIÓN A AMAZON MQ (RabbitMQ)
+    # ═══════════════════════════════════════════════════════════════
+    host: b-455e546c-be71-4fe2-ba0f-bd3112e6c220.mq.us-east-2.on.aws
+    port: 5671  # Puerto SSL OBLIGATORIO
+    username: ${RABBITMQ_USER}      # bantec, nexus, arcbank, ecusol
+    password: ${RABBITMQ_PASSWORD}  # Solicitar a DIGICONECU
+    virtual-host: /
+    
+    # SSL/TLS Obligatorio
+    ssl:
+      enabled: true
+      algorithm: TLSv1.2
+    
+    # ═══════════════════════════════════════════════════════════════
+    # POLÍTICA DE REINTENTOS (Si falla el procesamiento)
+    # ═══════════════════════════════════════════════════════════════
+    listener:
+      simple:
+        acknowledge-mode: auto
+        default-requeue-rejected: false  # Si falla, va al DLQ
+        retry:
+          enabled: true
+          max-attempts: 4
+          initial-interval: 800ms
+          multiplier: 2.5
+          max-interval: 5000ms
 
-# SSL/TLS Obligatorio (puerto 5671)
-spring.rabbitmq.ssl.enabled=true
-spring.rabbitmq.ssl.algorithm=TLSv1.2
+# ═══════════════════════════════════════════════════════════════
+# COLA ASIGNADA A SU BANCO (Cambiar según corresponda)
+# ═══════════════════════════════════════════════════════════════
+bank:
+  code: BANTEC  # Cambiar: NEXUS, BANTEC, ARCBANK, ECUSOL
+  queue:
+    input: q.bank.BANTEC.in       # Cola principal
+    dlq: q.bank.BANTEC.dlq        # Dead Letter Queue
 
-# Politica de reintentos
-spring.rabbitmq.listener.simple.acknowledge-mode=auto
-spring.rabbitmq.listener.simple.default-requeue-rejected=false
-spring.rabbitmq.listener.simple.retry.enabled=true
-spring.rabbitmq.listener.simple.retry.max-attempts=4
-spring.rabbitmq.listener.simple.retry.initial-interval=800ms
-spring.rabbitmq.listener.simple.retry.multiplier=2.5
-spring.rabbitmq.listener.simple.retry.max-interval=5000ms
+# ═══════════════════════════════════════════════════════════════
+# URL DEL SWITCH PARA CALLBACK
+# ═══════════════════════════════════════════════════════════════
+switch:
+  url: http://34.16.106.7:8000    # Kong API Gateway
+  callback:
+    endpoint: /api/v1/transacciones/callback
 ```
-
-**Credenciales por banco:**
-| Usuario | Password |
-|---------|----------|
-| `nexus` | `nexuspass` |
-| `bantec` | `bantecpass` |
-| `arcbank` | `arcbankpass` |
-| `ecusol` | `ecusolpass` |
-
-> 📌 **Consejo de Seguridad:** Nunca hardcodee las credenciales. Use variables de entorno o AWS Secrets Manager.
 
 ---
 
-### 3. DTO de Mensaje (Estructura del Payload)
+### Paso 3: DTOs (Estructuras de Datos)
 
-El banco origen debe enviar mensajes con la siguiente estructura ISO 20022.
+#### 3.1 DTO de Transferencia Entrante (pacs.008)
 
-> ⚠️ **CAMPO OBLIGATORIO**: El campo `creditor.targetBankId` es el **ROUTING KEY** que determina a qué banco se enrutará la transacción. Si este campo está vacío o es inválido, la transacción será rechazada.
-
-#### Estructura Java
 ```java
+package com.subanco.integracion.dto;
+
+import lombok.Data;
+import java.math.BigDecimal;
+
+/**
+ * Estructura del mensaje que llega desde RabbitMQ.
+ * Representa una transferencia interbancaria (pacs.008).
+ */
 @Data
-public class TransferenciaDTO {
+public class MensajeISO {
     private Header header;
     private Body body;
     
@@ -183,16 +293,16 @@ public class TransferenciaDTO {
     public static class Header {
         private String messageId;           // ID único del mensaje
         private String creationDateTime;    // Timestamp ISO 8601
-        private String originatingBankId;   // BIC del banco origen (quien envía)
+        private String originatingBankId;   // BIC del banco origen (NEXUS, BANTEC, etc.)
     }
     
     @Data
     public static class Body {
-        private String instructionId;       // UUID de la instrucción
+        private String instructionId;       // UUID de la instrucción (CLAVE para tracking)
         private String endToEndId;          // Referencia del cliente
         private Amount amount;
-        private Debtor debtor;              // Ordenante
-        private Creditor creditor;          // Beneficiario
+        private Actor debtor;               // Ordenante (quien envía)
+        private Actor creditor;             // Beneficiario (quien recibe)
         private String remittanceInformation; // Concepto
     }
     
@@ -203,75 +313,115 @@ public class TransferenciaDTO {
     }
     
     @Data
-    public static class Debtor {
+    public static class Actor {
         private String name;
         private String accountId;
         private String accountType;         // CHECKING, SAVINGS
+        private String targetBankId;        // BIC destino (solo en creditor)
+    }
+}
+```
+
+#### 3.2 DTO de Respuesta al Switch (pacs.002 - StatusReport)
+
+```java
+package com.subanco.integracion.dto;
+
+import lombok.Data;
+import lombok.Builder;
+import lombok.AllArgsConstructor;
+import lombok.NoArgsConstructor;
+
+import java.util.UUID;
+
+/**
+ * DTO para notificar el resultado al Switch.
+ * El banco debe enviar este DTO al endpoint /callback del Switch.
+ */
+@Data
+@Builder
+@AllArgsConstructor
+@NoArgsConstructor
+public class StatusReportDTO {
+    private Header header;
+    private Body body;
+    
+    @Data
+    @Builder
+    @AllArgsConstructor
+    @NoArgsConstructor
+    public static class Header {
+        private String messageId;           // Nuevo ID para esta respuesta
+        private String creationDateTime;    // Timestamp ISO 8601
+        private String respondingBankId;    // BIC del banco que responde (ustedes)
     }
     
     @Data
-    public static class Creditor {
-        private String name;
-        private String accountId;
-        private String accountType;
-        private String targetBankId;        // ⚠️ ROUTING KEY - BIC destino (OBLIGATORIO)
+    @Builder
+    @AllArgsConstructor
+    @NoArgsConstructor
+    public static class Body {
+        private UUID originalInstructionId;   // El instructionId de la tx original
+        private String originalMessageId;     // El messageId original
+        private String status;                // COMPLETED o REJECTED
+        private String reasonCode;            // Solo si REJECTED: AC03, AM04, etc.
+        private String reasonDescription;     // Descripción del error
+        private String processedDateTime;     // Cuándo se procesó
     }
 }
 ```
 
-#### Ejemplo de Mensaje JSON (Enviado por Banco Origen)
+---
 
-```json
-{
-  "header": {
-    "messageId": "MSG-550e8400-e29b-41d4-a716-446655440000",
-    "creationDateTime": "2026-01-30T20:30:00Z",
-    "originatingBankId": "NEXUS"
-  },
-  "body": {
-    "instructionId": "550e8400-e29b-41d4-a716-446655440000",
-    "endToEndId": "REF-CLIENTE-001",
-    "amount": {
-      "currency": "USD",
-      "value": 1500.00
-    },
-    "debtor": {
-      "name": "Juan Pérez",
-      "accountId": "123456789012",
-      "accountType": "CHECKING"
-    },
-    "creditor": {
-      "name": "María García",
-      "accountId": "987654321098",
-      "accountType": "SAVINGS",
-      "targetBankId": "BANTEC"
-    },
-    "remittanceInformation": "Pago por servicios profesionales"
-  }
+### Paso 4: Configuración RabbitMQ
+
+```java
+package com.subanco.integracion.config;
+
+import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+
+@Configuration
+public class RabbitMQConfig {
+
+    /**
+     * Converter JSON para mensajes RabbitMQ.
+     * Permite deserializar automáticamente los mensajes a DTOs.
+     */
+    @Bean
+    public Jackson2JsonMessageConverter messageConverter() {
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.registerModule(new JavaTimeModule());
+        return new Jackson2JsonMessageConverter(mapper);
+    }
 }
 ```
 
-#### Valores Válidos para `targetBankId` (Routing Key)
-
-| Valor | Banco Destino | Cola RabbitMQ |
-|-------|---------------|---------------|
-| `NEXUS` | Nexus | `q.bank.NEXUS.in` |
-| `BANTEC` | Bantec | `q.bank.BANTEC.in` |
-| `ARCBANK` | ArcBank | `q.bank.ARCBANK.in` |
-| `ECUSOL` | Ecusol | `q.bank.ECUSOL.in` |
-
-> 🚨 **Error BE01**: Si `targetBankId` contiene un valor no válido, el Switch rechazará la transacción con el código `BE01 - Routing key inválido`.
-
 ---
 
-### 4. Implementación del Consumer (Listener)
+### Paso 5: Listener de Transferencias (⭐ COMPONENTE PRINCIPAL)
 
 ```java
-import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.amqp.AmqpRejectAndDontRequeueException;
-import org.springframework.stereotype.Component;
+package com.subanco.integracion.listener;
+
+import com.subanco.integracion.dto.MensajeISO;
+import com.subanco.integracion.dto.StatusReportDTO;
+import com.subanco.integracion.service.CoreBancarioService;
+import com.subanco.integracion.service.SwitchCallbackService;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+
+import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+import java.time.LocalDateTime;
+import java.util.UUID;
 
 @Slf4j
 @Component
@@ -279,71 +429,192 @@ import lombok.extern.slf4j.Slf4j;
 public class TransferenciaListener {
 
     private final CoreBancarioService coreService;
-    private final WebhookClient webhookClient;
+    private final SwitchCallbackService callbackService;
+
+    @Value("${bank.code}")
+    private String bankCode;
 
     /**
-     * Listener para recibir transferencias del Switch.
+     * ═══════════════════════════════════════════════════════════════════════════
+     * LISTENER PRINCIPAL - PROCESA TRANSFERENCIAS DESDE RABBITMQ
+     * ═══════════════════════════════════════════════════════════════════════════
      * 
-     * IMPORTANTE: Reemplace "q.bank.NEXUS.in" con su cola asignada:
-     * - Nexus:  q.bank.NEXUS.in
-     * - Bantec: q.bank.BANTEC.in
+     * IMPORTANTE: Reemplace "q.bank.BANTEC.in" con su cola asignada:
+     * - Nexus:   q.bank.NEXUS.in
+     * - Bantec:  q.bank.BANTEC.in
      * - ArcBank: q.bank.ARCBANK.in
-     * - Ecusol: q.bank.ECUSOL.in
+     * - Ecusol:  q.bank.ECUSOL.in
      */
-    @RabbitListener(queues = "q.bank.NEXUS.in")
-    public void recibirTransferencia(TransferenciaDTO mensaje) {
-        log.info("Recibida transferencia: {} por ${}", 
-                 mensaje.getBody().getInstructionId(),
-                 mensaje.getBody().getAmount().getValue());
+    @RabbitListener(queues = "${bank.queue.input}")
+    public void procesarTransferenciaEntrante(MensajeISO mensaje) {
+        String instructionId = mensaje.getBody().getInstructionId();
+        String bancoOrigen = mensaje.getHeader().getOriginatingBankId();
+        
+        log.info("═══════════════════════════════════════════════════════════════════════════");
+        log.info("TRANSFERENCIA RECIBIDA via RabbitMQ");
+        log.info("  InstructionId: {}", instructionId);
+        log.info("  Banco Origen: {}", bancoOrigen);
+        log.info("  Monto: {} {}", mensaje.getBody().getAmount().getValue(), 
+                                   mensaje.getBody().getAmount().getCurrency());
+        log.info("  Cuenta Destino: {}", mensaje.getBody().getCreditor().getAccountId());
+        log.info("═══════════════════════════════════════════════════════════════════════════");
+
+        StatusReportDTO resultado;
         
         try {
-            // ═══════════════════════════════════════════════════════════
-            // PASO 1: Validar cuenta beneficiaria en su Core Bancario
-            // ═══════════════════════════════════════════════════════════
+            // ═══════════════════════════════════════════════════════════════
+            // PASO 1: Validar cuenta destino
+            // ═══════════════════════════════════════════════════════════════
             String cuentaDestino = mensaje.getBody().getCreditor().getAccountId();
-            if (!coreService.existeCuenta(cuentaDestino)) {
-                log.error("Cuenta no existe: {}", cuentaDestino);
-                // Rechazar sin reintentar - Cuenta inválida
-                throw new AmqpRejectAndDontRequeueException("AC03 - Cuenta no existe");
+            
+            if (!coreService.cuentaExiste(cuentaDestino)) {
+                log.error("Cuenta destino no existe: {}", cuentaDestino);
+                resultado = construirRespuestaRechazo(mensaje, "AC03", "Cuenta destino no existe");
+                callbackService.notificarSwitch(resultado);
+                return;
             }
             
-            // ═══════════════════════════════════════════════════════════
-            // PASO 2: Procesar el depósito en el Core Bancario
-            // ═══════════════════════════════════════════════════════════
+            if (coreService.cuentaBloqueada(cuentaDestino)) {
+                log.error("Cuenta destino bloqueada: {}", cuentaDestino);
+                resultado = construirRespuestaRechazo(mensaje, "AC06", "Cuenta bloqueada");
+                callbackService.notificarSwitch(resultado);
+                return;
+            }
+
+            // ═══════════════════════════════════════════════════════════════
+            // PASO 2: Procesar depósito en Core Bancario
+            // ═══════════════════════════════════════════════════════════════
             coreService.procesarDeposito(
                 cuentaDestino,
                 mensaje.getBody().getAmount().getValue(),
-                mensaje.getBody().getCreditor().getName(),
-                mensaje.getBody().getInstructionId()
+                "Transferencia de " + bancoOrigen + " - Ref: " + instructionId
             );
             
-            log.info("Depósito procesado exitosamente: {}", 
-                     mensaje.getBody().getInstructionId());
+            log.info("✅ Depósito procesado exitosamente");
+
+            // ═══════════════════════════════════════════════════════════════
+            // PASO 3: Notificar ÉXITO al Switch
+            // ═══════════════════════════════════════════════════════════════
+            resultado = construirRespuestaExito(mensaje);
+            callbackService.notificarSwitch(resultado);
             
-            // ═══════════════════════════════════════════════════════════
-            // PASO 3: Confirmar al Banco Origen vía Webhook HTTP
-            // ═══════════════════════════════════════════════════════════
-            webhookClient.confirmarTransaccion(
-                mensaje.getHeader().getOriginatingBankId(),
-                mensaje.getBody().getInstructionId(),
-                "COMPLETED"
-            );
-            
-        } catch (CuentaNoExisteException e) {
-            // Error de negocio - No reintentar
-            log.error("Error de cuenta: {}", e.getMessage());
-            throw new AmqpRejectAndDontRequeueException("AC03 - " + e.getMessage(), e);
-            
-        } catch (SaldoInsuficienteException e) {
-            // Error de negocio - No reintentar
-            log.error("Error de saldo: {}", e.getMessage());
-            throw new AmqpRejectAndDontRequeueException("AM04 - " + e.getMessage(), e);
+            log.info("✅ Callback enviado al Switch: COMPLETED");
             
         } catch (Exception e) {
-            // Error técnico - Spring aplicará reintentos automáticos
-            // Después de 4 intentos fallidos, el mensaje irá al DLQ
-            log.error("Error técnico procesando transferencia", e);
-            throw e;  // Permite que Spring maneje los reintentos
+            log.error("Error procesando transferencia: {}", e.getMessage(), e);
+            resultado = construirRespuestaRechazo(mensaje, "MS03", e.getMessage());
+            callbackService.notificarSwitch(resultado);
+        }
+    }
+
+    /**
+     * Construye respuesta de ÉXITO para el Switch
+     */
+    private StatusReportDTO construirRespuestaExito(MensajeISO mensaje) {
+        return StatusReportDTO.builder()
+                .header(StatusReportDTO.Header.builder()
+                        .messageId(UUID.randomUUID().toString())
+                        .creationDateTime(LocalDateTime.now().toString())
+                        .respondingBankId(bankCode)
+                        .build())
+                .body(StatusReportDTO.Body.builder()
+                        .originalInstructionId(UUID.fromString(mensaje.getBody().getInstructionId()))
+                        .originalMessageId(mensaje.getHeader().getMessageId())
+                        .status("COMPLETED")
+                        .processedDateTime(LocalDateTime.now().toString())
+                        .build())
+                .build();
+    }
+
+    /**
+     * Construye respuesta de RECHAZO para el Switch
+     */
+    private StatusReportDTO construirRespuestaRechazo(MensajeISO mensaje, 
+                                                       String reasonCode, 
+                                                       String reasonDescription) {
+        return StatusReportDTO.builder()
+                .header(StatusReportDTO.Header.builder()
+                        .messageId(UUID.randomUUID().toString())
+                        .creationDateTime(LocalDateTime.now().toString())
+                        .respondingBankId(bankCode)
+                        .build())
+                .body(StatusReportDTO.Body.builder()
+                        .originalInstructionId(UUID.fromString(mensaje.getBody().getInstructionId()))
+                        .originalMessageId(mensaje.getHeader().getMessageId())
+                        .status("REJECTED")
+                        .reasonCode(reasonCode)
+                        .reasonDescription(reasonDescription)
+                        .processedDateTime(LocalDateTime.now().toString())
+                        .build())
+                .build();
+    }
+}
+```
+
+---
+
+### Paso 6: Servicio para Callback al Switch
+
+```java
+package com.subanco.integracion.service;
+
+import com.subanco.integracion.dto.StatusReportDTO;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
+
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class SwitchCallbackService {
+
+    private final RestTemplate restTemplate;
+
+    @Value("${switch.url}")
+    private String switchUrl;
+
+    @Value("${switch.callback.endpoint}")
+    private String callbackEndpoint;
+
+    /**
+     * ═══════════════════════════════════════════════════════════════════════════
+     * NOTIFICA EL RESULTADO DE LA TRANSFERENCIA AL SWITCH
+     * ═══════════════════════════════════════════════════════════════════════════
+     * 
+     * Este método DEBE ser llamado después de procesar la transferencia.
+     * El Switch espera este callback para:
+     * 1. Actualizar el estado de la transacción
+     * 2. Registrar los movimientos contables
+     * 3. Notificar al banco origen
+     */
+    public void notificarSwitch(StatusReportDTO resultado) {
+        String url = switchUrl + callbackEndpoint;
+        
+        log.info("Enviando callback al Switch: {}", url);
+        log.info("  InstructionId: {}", resultado.getBody().getOriginalInstructionId());
+        log.info("  Status: {}", resultado.getBody().getStatus());
+        
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            
+            HttpEntity<StatusReportDTO> request = new HttpEntity<>(resultado, headers);
+            
+            restTemplate.postForEntity(url, request, String.class);
+            
+            log.info("✅ Callback enviado exitosamente al Switch");
+            
+        } catch (Exception e) {
+            log.error("❌ Error enviando callback al Switch: {}", e.getMessage());
+            // Considerar implementar cola local de reintentos
+            throw new RuntimeException("Error notificando al Switch: " + e.getMessage(), e);
         }
     }
 }
@@ -351,60 +622,151 @@ public class TransferenciaListener {
 
 ---
 
-## 🔄 Política de Reintentos
+## 📡 Endpoint de Callback del Switch
 
-El sistema está configurado con **backoff exponencial**:
+Los bancos deben enviar el resultado de la transferencia a:
 
-| Intento | Delay | Tiempo Acumulado |
-|---------|-------|------------------|
-| 1 (inicial) | 0ms | 0ms |
-| 2 | 800ms | 800ms |
-| 3 | 2,000ms | 2.8s |
-| 4 | 5,000ms | 7.8s |
+```
+POST http://34.16.106.7:8000/api/v1/transacciones/callback
+```
 
-Después del **4to intento fallido**, el mensaje se mueve automáticamente a la **Dead Letter Queue (DLQ)**.
+### Request Body (StatusReportDTO)
+
+```json
+{
+  "header": {
+    "messageId": "uuid-nuevo-generado-por-ustedes",
+    "creationDateTime": "2026-02-01T10:30:00",
+    "respondingBankId": "BANTEC"
+  },
+  "body": {
+    "originalInstructionId": "uuid-de-la-transaccion-original",
+    "originalMessageId": "messageId-original",
+    "status": "COMPLETED",
+    "processedDateTime": "2026-02-01T10:30:00"
+  }
+}
+```
+
+### Caso de Rechazo
+
+```json
+{
+  "header": {
+    "messageId": "uuid-nuevo-generado-por-ustedes",
+    "creationDateTime": "2026-02-01T10:30:00",
+    "respondingBankId": "BANTEC"
+  },
+  "body": {
+    "originalInstructionId": "uuid-de-la-transaccion-original",
+    "originalMessageId": "messageId-original",
+    "status": "REJECTED",
+    "reasonCode": "AC03",
+    "reasonDescription": "Cuenta destino no existe",
+    "processedDateTime": "2026-02-01T10:30:00"
+  }
+}
+```
+
+### Códigos de Rechazo ISO 20022
+
+| Código | Descripción | Cuándo Usar |
+|--------|-------------|-------------|
+| `AC03` | Cuenta inválida | La cuenta destino no existe |
+| `AC06` | Cuenta bloqueada | La cuenta está bloqueada o inactiva |
+| `AM04` | Fondos insuficientes | (No aplica en destino, pero incluido) |
+| `MS03` | Error interno | Error técnico en el procesamiento |
+| `RC01` | Referencia inválida | El instructionId no es válido |
 
 ---
 
-## ☠️ Dead Letter Queue (DLQ)
+## ✅ Checklist de Implementación
 
-Los mensajes que fallan después de todos los reintentos se mueven a:
+| # | Tarea | Estado |
+|---|-------|--------|
+| 1 | Agregar dependencias Maven (`spring-boot-starter-amqp`) | ⬜ |
+| 2 | Configurar `application.yml` con credenciales RabbitMQ | ⬜ |
+| 3 | Crear DTOs (`MensajeISO`, `StatusReportDTO`) | ⬜ |
+| 4 | Configurar `Jackson2JsonMessageConverter` | ⬜ |
+| 5 | Implementar `TransferenciaListener` | ⬜ |
+| 6 | Implementar `SwitchCallbackService` | ⬜ |
+| 7 | Probar conexión a RabbitMQ | ⬜ |
+| 8 | Probar callback al Switch | ⬜ |
 
-| Cola Principal | Cola DLQ |
-|----------------|----------|
-| `q.bank.NEXUS.in` | `q.bank.NEXUS.dlq` |
-| `q.bank.BANTEC.in` | `q.bank.BANTEC.dlq` |
-| `q.bank.ARCBANK.in` | `q.bank.ARCBANK.dlq` |
-| `q.bank.ECUSOL.in` | `q.bank.ECUSOL.dlq` |
+---
 
-### Monitoreo de DLQ,  si se alcanza
+## 🧪 Pruebas
 
-Se recomienda implementar un listener secundario para alertar sobre mensajes en DLQ:
+### 1. Verificar Conexión a RabbitMQ
 
-```java
-@RabbitListener(queues = "q.bank.NEXUS.dlq")
-public void procesarMensajeFallido(TransferenciaDTO mensaje) {
-    log.error("ALERTA: Mensaje en DLQ - InstructionId: {}", 
-              mensaje.getBody().getInstructionId());
-    
-    // Enviar alerta al equipo de operaciones
-    alertService.enviarAlerta(
-        "Transferencia fallida requiere intervención manual",
-        mensaje.getBody().getInstructionId()
-    );
-}
+```bash
+# El log debe mostrar:
+# "Started consuming from queue: q.bank.BANTEC.in"
+```
+
+### 2. Enviar Transferencia de Prueba
+
+Desde Postman o curl al Switch:
+
+```bash
+curl -X POST http://34.16.106.7:8000/api/v1/transacciones \
+  -H "Content-Type: application/json" \
+  -H "apikey: SU_API_KEY" \
+  -d '{
+    "header": {
+      "messageId": "test-123",
+      "creationDateTime": "2026-02-01T10:00:00",
+      "originatingBankId": "NEXUS"
+    },
+    "body": {
+      "instructionId": "550e8400-e29b-41d4-a716-446655440000",
+      "amount": {
+        "currency": "USD",
+        "value": 100.00
+      },
+      "debtor": {
+        "name": "Juan Pérez",
+        "accountId": "1234567890"
+      },
+      "creditor": {
+        "name": "María García",
+        "accountId": "0987654321",
+        "targetBankId": "BANTEC"
+      }
+    }
+  }'
+```
+
+### 3. Verificar que llegó a la Cola
+
+El log de su banco debe mostrar:
+```
+TRANSFERENCIA RECIBIDA via RabbitMQ
+  InstructionId: 550e8400-e29b-41d4-a716-446655440000
+  Banco Origen: NEXUS
+  Monto: 100.00 USD
+```
+
+### 4. Verificar Callback
+
+```
+✅ Callback enviado al Switch: COMPLETED
 ```
 
 ---
 
-## 🔒 Permisos y Seguridad
+## 📞 Soporte
 
-Cada banco tiene permisos restringidos mediante ACLs:
+Para dudas técnicas o solicitud de credenciales:
 
-| Permiso | Expresión Regular | Descripción |
-|---------|-------------------|-------------|
-| **READ** | `^q\.bank\.{SU_BANCO}\..*` | Solo puede leer de sus colas |
-| **WRITE** | `^(ex\.transfers\.tx\|q\.bank\.{SU_BANCO}\..*)$` | Puede publicar y gestionar sus colas |
+| Tipo | Contacto |
+|------|----------|
+| Credenciales RabbitMQ | Solicitar a DIGICONECU |
+| Problemas de conexión | soporte@digiconecu.ec |
+| Documentación técnica | Este documento |
 
-> ⚠️ Cualquier intento de acceder a colas de otro banco resultará en error `403 ACCESS_REFUSED`.
+---
 
+**Versión:** 2.0.0  
+**Última actualización:** 2026-02-01  
+**Cambio principal:** Migración de flujo síncrono a asíncrono con callback HTTP
