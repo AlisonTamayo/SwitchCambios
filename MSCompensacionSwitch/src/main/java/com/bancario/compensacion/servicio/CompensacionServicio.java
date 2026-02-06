@@ -153,7 +153,7 @@ public class CompensacionServicio {
 
                 // IMPORTANTE: Al cerrar el ciclo actual automáticamente,
                 // definimos que el SIGUIENTE ciclo durará también 90 minutos.
-                realizarCierreDiario(cicloId, 90);
+                realizarCierreDiario(cicloId, 60);
             } catch (Exception e) {
                 log.error("Error en cierre automático: {}", e.getMessage());
             }
@@ -263,7 +263,7 @@ public class CompensacionServicio {
             primerCiclo.setFechaApertura(LocalDateTime.now(java.time.ZoneOffset.UTC));
             CicloCompensacion guardado = cicloRepo.save(primerCiclo);
 
-            programarCierreAutomatico(guardado.getId(), 90);
+            programarCierreAutomatico(guardado.getId(), 60);
 
             ciclos.add(guardado);
         }

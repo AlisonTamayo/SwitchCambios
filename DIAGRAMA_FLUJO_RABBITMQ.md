@@ -60,35 +60,35 @@ FASE 2: PROCESAMIENTO EN EL SWITCH
     ┌─────────────────────────────────────────────────────────────────────────────────────────┐
     │                                 SWITCH DIGICONECU                                       │
     │                                                                                         │
-    │  ┌──────────────────────────────────────────────────────────────────────────────────┐  │
-    │  │  TransaccionControlador.java                                                     │  │
-    │  │  @PostMapping("/api/v1/transacciones")                                           │  │
-    │  │  → Recibe pacs.008                                                               │  │
-    │  └──────────────────────────────────────────────────────────────────────────────────┘  │
+    │  ┌──────────────────────────────────────────────────────────────────────────────────┐   │
+    │  │  TransaccionControlador.java                                                     │   │
+    │  │  @PostMapping("/api/v1/transacciones")                                           │   │
+    │  │  → Recibe pacs.008                                                               │   │
+    │  └──────────────────────────────────────────────────────────────────────────────────┘   │
     │                      │                                                                  │
     │                      ▼                                                                  │
-    │  ┌──────────────────────────────────────────────────────────────────────────────────┐  │
-    │  │  TransaccionServicio.java                                                        │  │
-    │  │                                                                                  │  │
-    │  │  1️⃣ Validar idempotencia (Redis)       → Evita duplicados                        │  │
-    │  │  2️⃣ Validar bancos en Directorio       → NEXUS y BANTEC existen como bancos válidos  │  │
-    │  │  3️⃣ Registrar DEBIT en Ledger          → Quita $100 al "Balance" de NEXUS        │  │
-    │  │  4️⃣ Registrar posición en Clearing     → DEBITO para compensación                │  │
-    │  │  5️⃣ Publicar mensaje a RabbitMQ        ◄── MOMENTO CLAVE                         │  │
-    │  │  6️⃣ Guardar tx con estado "QUEUED"                                               │  │
-    │  └──────────────────────────────────────────────────────────────────────────────────┘  │
+    │  ┌──────────────────────────────────────────────────────────────────────────────────┐   │
+    │  │  TransaccionServicio.java                                                        │   │
+    │  │                                                                                  │   │
+    │  │  1️⃣ Validar idempotencia (Redis)       → Evita duplicados                        │   │
+    │  │  2️⃣ Validar bancos en Directorio       → NEXUS y BANTEC existen como bancos válidos  │   
+    │  │  3️⃣ Registrar DEBIT en Ledger          → Quita $100 al "Balance" de NEXUS        │   │
+    │  │  4️⃣ Registrar posición en Clearing     → DEBITO para compensación                │   │
+    │  │  5️⃣ Publicar mensaje a RabbitMQ        ◄── MOMENTO CLAVE                         │   │
+    │  │  6️⃣ Guardar tx con estado "QUEUED"                                               │   │
+    │  └──────────────────────────────────────────────────────────────────────────────────┘   │
     │                      │                                                                  │
     │                      │ mensajeriaServicio.publicarTransferencia("BANTEC", mensaje)      │
     │                      ▼                                                                  │
-    │  ┌──────────────────────────────────────────────────────────────────────────────────┐  │
-    │  │  MensajeriaServicio.java                                                         │  │
-    │  │                                                                                  │  │
-    │  │  rabbitTemplate.convertAndSend(                                                  │  │
-    │  │      "ex.transfers.tx",    ← Exchange                                            │  │
-    │  │      "BANTEC",             ← Routing Key                                         │  │
-    │  │      mensaje               ← pacs.008 como JSON                                  │  │
-    │  │  );                                                                              │  │
-    │  └──────────────────────────────────────────────────────────────────────────────────┘  │
+    │  ┌──────────────────────────────────────────────────────────────────────────────────┐   │
+    │  │  MensajeriaServicio.java                                                         │   │
+    │  │                                                                                  │   │
+    │  │  rabbitTemplate.convertAndSend(                                                  │   │
+    │  │      "ex.transfers.tx",    ← Exchange                                            │   │
+    │  │      "BANTEC",             ← Routing Key                                         │   │
+    │  │      mensaje               ← pacs.008 como JSON                                  │   │
+    │  │  );                                                                              │   │
+    │  └──────────────────────────────────────────────────────────────────────────────────┘   │
     └─────────────────────────────────────────────────────────────────────────────────────────┘
                       │
                       │ ② HTTP 202 Accepted (INMEDIATO, ~100ms)

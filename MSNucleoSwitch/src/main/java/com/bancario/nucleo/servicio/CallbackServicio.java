@@ -178,7 +178,7 @@ public class CallbackServicio {
 
             java.util.Map<String, Object> movimiento = new java.util.HashMap<>();
             movimiento.put("codigoBic", bic);
-            movimiento.put("referenciaTransaccion", instructionId.toString());
+            movimiento.put("idInstruccion", instructionId.toString());
             movimiento.put("monto", monto);
             movimiento.put("tipo", tipo);
 
@@ -196,18 +196,12 @@ public class CallbackServicio {
 
     private void notificarCompensacion(String bic, BigDecimal monto, boolean esDebito) {
         try {
-            String url = compensacionUrl + "/api/v1/compensacion/posiciones";
+            String url = String.format("%s/api/v1/compensacion/acumular?bic=%s&monto=%s&esDebito=%s",
+                    compensacionUrl, bic, monto.toString(), esDebito);
 
-            java.util.Map<String, Object> posicion = new java.util.HashMap<>();
-            posicion.put("codigoBic", bic);
-            posicion.put("monto", monto);
-            posicion.put("esDebito", esDebito);
+            restTemplate.postForEntity(url, null, Void.class);
+            log.info("Compensación notificada para {} (esDebito={}): {}", bic, esDebito, monto);
 
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            HttpEntity<java.util.Map<String, Object>> request = new HttpEntity<>(posicion, headers);
-
-            restTemplate.postForEntity(url, request, String.class);
         } catch (Exception e) {
             log.warn("Error notificando a Compensación (no crítico): {}", e.getMessage());
         }
