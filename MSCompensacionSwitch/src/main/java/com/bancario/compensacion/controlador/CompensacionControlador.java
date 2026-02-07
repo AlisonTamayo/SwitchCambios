@@ -58,6 +58,14 @@ public class CompensacionControlador {
         return ResponseEntity.ok().build();
     }
 
+    @PostMapping("/operaciones")
+    @Operation(summary = "Registrar Operación (Clearing)", description = "Registra una transacción individual para ser compensada en el ciclo abierto.")
+    public ResponseEntity<Void> registrarOperacion(
+            @RequestBody com.bancario.compensacion.dto.RegistroOperacionDTO req) {
+        service.registrarOperacion(req);
+        return ResponseEntity.ok().build();
+    }
+
     @PostMapping("/ciclos/{cicloId}/cierre")
     @Operation(summary = "EJECUTAR CIERRE DIARIO (Settlement)", description = "Cierra ciclo actual y programa el siguiente con la duración especificada (o 10 min por defecto).")
     public ResponseEntity<?> cerrarCiclo(

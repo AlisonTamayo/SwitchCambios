@@ -1,5 +1,5 @@
 package com.switchbank.mscontabilidad.modelo;
 
 public enum TipoMovimiento {
-    CREDIT, DEBIT, RECHARGE, REVERSAL
+    CREDIT, DEBIT, RECHARGE, REVERSAL, SETTLEMENT
 }

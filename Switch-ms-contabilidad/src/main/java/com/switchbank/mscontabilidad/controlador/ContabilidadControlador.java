@@ -42,6 +42,20 @@ public class ContabilidadControlador {
         return ResponseEntity.ok(servicio.registrarMovimiento(req));
     }
 
+    @PostMapping("/reservar")
+    @Operation(summary = "Reservar Fondos (Pre-Autorización)", description = "Bloquea fondos preventivamente.")
+    public ResponseEntity<CuentaDTO> reservarFondos(@RequestBody RegistroMovimientoRequest req) {
+        return ResponseEntity.ok(servicio.reservarFondos(req));
+    }
+
+    @PostMapping("/compensar")
+    @Operation(summary = "Aplicar Compensación Masiva", description = "Cierra el ciclo y asienta saldos netos.")
+    public ResponseEntity<Void> aplicarCompensacion(
+            @RequestBody com.switchbank.mscontabilidad.dto.SolicitudCompensacionDTO req) {
+        servicio.aplicarCompensacion(req);
+        return ResponseEntity.ok().build();
+    }
+
     @PostMapping("/v2/switch/transfers/return")
     @Operation(summary = "Reversar Transacción", description = "Ejecuta una devolución o reverso contable.")
     public ResponseEntity<CuentaDTO> revertirTransaccion(@RequestBody ReturnRequestDTO req) {

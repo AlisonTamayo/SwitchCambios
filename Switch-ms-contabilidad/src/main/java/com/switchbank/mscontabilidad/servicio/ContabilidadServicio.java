@@ -206,14 +206,74 @@ public class ContabilidadServicio {
         return mapper.toDTOList(movimientos);
     }
 
+    @Transactional
+    public CuentaDTO reservarFondos(RegistroMovimientoRequest req) {
+        CuentaTecnica cuenta = cuentaRepo.findByCodigoBic(req.getCodigoBic())
+                .orElseThrow(() -> new RuntimeException("Cuenta no encontrada para BIC: " + req.getCodigoBic()));
+
+        String hashActual = calcularHash(cuenta);
+        if (!hashActual.equals(cuenta.getFirmaIntegridad())) {
+            throw new RuntimeException(
+                    "ALERTA DE SEGURIDAD: La cuenta " + req.getCodigoBic() + " ha sido alterada manualmente.");
+        }
+
+        if (cuenta.getSaldoDisponible().compareTo(req.getMonto()) < 0) {
+            throw new RuntimeException("FONDOS INSUFICIENTES para reservar: " + req.getCodigoBic());
+        }
+
+        cuenta.setSaldoDisponible(cuenta.getSaldoDisponible().subtract(req.getMonto()));
+        cuenta.setFondosBloqueados(cuenta.getFondosBloqueados().add(req.getMonto()));
+
+        cuenta.setFirmaIntegridad(calcularHash(cuenta));
+        return mapper.toDTO(cuentaRepo.save(cuenta));
+    }
+
+    @Transactional
+    public void aplicarCompensacion(com.switchbank.mscontabilidad.dto.SolicitudCompensacionDTO req) {
+        for (com.switchbank.mscontabilidad.dto.SolicitudCompensacionDTO.PosicionBancariaDTO pos : req.getPosiciones()) {
+            CuentaTecnica cuenta = cuentaRepo.findByCodigoBic(pos.getBic())
+                    .orElseThrow(() -> new RuntimeException("Cuenta no encontrada para BIC: " + pos.getBic()));
+
+            String hashActual = calcularHash(cuenta);
+            if (!hashActual.equals(cuenta.getFirmaIntegridad())) {
+                throw new RuntimeException(
+                        "ALERTA DE SEGURIDAD: La cuenta " + pos.getBic() + " ha sido alterada manualmente.");
+            }
+
+            BigDecimal totalDebitos = pos.getTotalDebitos();
+
+            // Release blocks and add back to available (reverting the reservation)
+            cuenta.setFondosBloqueados(cuenta.getFondosBloqueados().subtract(totalDebitos));
+            cuenta.setSaldoDisponible(cuenta.getSaldoDisponible().add(totalDebitos));
+
+            // Apply Net Position
+            cuenta.setSaldoDisponible(cuenta.getSaldoDisponible().add(pos.getPosicionNeta()));
+
+            Movimiento mov = new Movimiento();
+            mov.setCuenta(cuenta);
+            mov.setTipo(TipoMovimiento.SETTLEMENT);
+            mov.setMonto(pos.getPosicionNeta().abs());
+            mov.setSaldoResultante(cuenta.getSaldoDisponible());
+            mov.setFechaRegistro(LocalDateTime.now());
+
+            movimientoRepo.save(mov);
+
+            cuenta.setFirmaIntegridad(calcularHash(cuenta));
+            cuentaRepo.save(cuenta);
+        }
+    }
+
     private String calcularHash(CuentaTecnica c) {
         try {
             String secretKey = "SECRET_KEY_INTERNAL_LEDGER_V3";
             String saldoFormateado = c.getSaldoDisponible()
                     .setScale(2, java.math.RoundingMode.HALF_UP)
                     .toString();
+            String bloqueadoFormateado = c.getFondosBloqueados()
+                    .setScale(2, java.math.RoundingMode.HALF_UP)
+                    .toString();
 
-            String data = saldoFormateado + c.getCodigoBic() + secretKey;
+            String data = saldoFormateado + bloqueadoFormateado + c.getCodigoBic() + secretKey;
 
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             byte[] hash = digest.digest(data.getBytes(StandardCharsets.UTF_8));

@@ -24,10 +24,39 @@ public class CompensacionServicio {
     private final PosicionInstitucionRepositorio posicionRepo;
     private final ArchivoLiquidacionRepositorio archivoRepo;
     private final SeguridadServicio seguridadServicio;
+    private final DetalleCompensacionRepositorio detalleRepo;
     private final CompensacionMapper mapper;
 
     private final org.springframework.scheduling.TaskScheduler taskScheduler;
     private java.util.concurrent.ScheduledFuture<?> scheduledTask;
+
+    @Transactional
+    public void registrarOperacion(com.bancario.compensacion.dto.RegistroOperacionDTO req) {
+        CicloCompensacion cicloAbierto = cicloRepo.findByEstado("ABIERTO")
+                .stream().findFirst()
+                .orElseThrow(() -> new RuntimeException("No hay ciclo abierto para compensar"));
+
+        DetalleCompensacion detalle = new DetalleCompensacion();
+        detalle.setIdInstruccion(req.getIdInstruccion());
+        detalle.setIdInstruccionOriginal(req.getIdInstruccionOriginal());
+        detalle.setCiclo(cicloAbierto);
+        detalle.setTipoOperacion(req.getTipoOperacion());
+        detalle.setBicEmisor(req.getBicEmisor());
+        detalle.setBicReceptor(req.getBicReceptor());
+        detalle.setMonto(req.getMonto());
+        detalle.setEstadoLiquidacion("INCLUIDO");
+        detalleRepo.save(detalle);
+
+        if ("REVERSO".equalsIgnoreCase(req.getTipoOperacion())) {
+            // REVERSO logic: Credit Emisor (Refund), Debit Receptor (Take back)
+            acumularTransaccion(cicloAbierto.getId(), req.getBicEmisor(), req.getMonto(), false); // Credit
+            acumularTransaccion(cicloAbierto.getId(), req.getBicReceptor(), req.getMonto(), true); // Debit
+        } else {
+            // PAGO logic: Debit Emisor, Credit Receptor
+            acumularTransaccion(cicloAbierto.getId(), req.getBicEmisor(), req.getMonto(), true);
+            acumularTransaccion(cicloAbierto.getId(), req.getBicReceptor(), req.getMonto(), false);
+        }
+    }
 
     @Transactional
     public void acumularTransaccion(Integer cicloId, String bic, BigDecimal monto, boolean esDebito) {
@@ -42,15 +71,6 @@ public class CompensacionServicio {
 
         posicion.recalcularNeto();
         posicionRepo.save(posicion);
-    }
-
-    @Transactional
-    public void acumularEnCicloAbierto(String bic, BigDecimal monto, boolean esDebito) {
-        CicloCompensacion cicloAbierto = cicloRepo.findByEstado("ABIERTO")
-                .stream().findFirst()
-                .orElseThrow(() -> new RuntimeException("No hay ciclo abierto para compensar"));
-
-        acumularTransaccion(cicloAbierto.getId(), bic, monto, esDebito);
     }
 
     private PosicionInstitucion crearPosicionVacia(Integer cicloId, String bic) {

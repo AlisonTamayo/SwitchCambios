@@ -66,7 +66,7 @@ export default function Compensacion() {
 
         const minInt = 10;
 
-        if (window.confirm(`¿Seguro que deseas cerrar el Ciclo #${cicloActivo.numeroCiclo} ahora?`)) {
+        if (window.confirm(`¿⚠️ CONFIRMAR CIERRE DE CICLO ⚠️?\n\n- Se calcularán netos multilaterales.\n- Se debitarán/acreditarán cuentas en Banco Central.\n- Ciclo #${cicloActivo.numeroCiclo} pasará a estado SETTLED.`)) {
             try {
                 await compensacionApi.post(`/compensacion/ciclos/${cicloActivo.id}/cierre?proximoCicloEnMinutos=${minInt}`);
                 alert(`✅ Ciclo #${cicloActivo.numeroCiclo} CERRADO. Siguiente en ${minInt} min.`);

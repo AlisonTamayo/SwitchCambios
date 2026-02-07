@@ -1,0 +1,194 @@
+services:
+  # ==========================================
+  # BASES DE DATOS
+  # ==========================================
+  directorio-db:
+    image: mongo:latest
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=admin
+    ports: [ "27017:27017" ]
+    healthcheck:
+      test: [ "CMD-SHELL", "mongosh", "--eval", "db.adminCommand('ping')" ]
+      interval: 5s
+      retries: 5
+
+  redis-switch:
+    image: redis:7-alpine
+    container_name: redis-switch
+    ports: [ "6379:6379" ]
+    command: redis-server --save 60 1 --loglevel warning
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      retries: 5
+
+  nucleo-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: nucleo_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: admin
+    ports: [ "5434:5432" ]
+    volumes:
+      - ./MSNucleoSwitch/init_nucleo.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 5s
+      retries: 5
+
+  contabilidad-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: contabilidad_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: admin
+    ports: [ "5435:5432" ]
+    volumes:
+      - ./Switch-ms-contabilidad/init_contabilidad.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 5s
+      retries: 5
+
+  compensacion-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: compensacion_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: admin
+    ports: [ "5436:5432" ]
+    volumes:
+      - ./MSCompensacionSwitch/init_compensacion.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 5s
+      retries: 5
+
+  devolucion-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: devolucion
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: admin
+    ports: [ "5437:5432" ]
+    volumes:
+      - ./MSDevolucionSwitch/init_devolucion.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres -d devolucion" ]
+      interval: 5s
+      retries: 5
+
+  # ==========================================
+  # MICROSERVICIOS
+  # ==========================================
+
+  ms-directorio:
+    build:
+      context: ./ms-directorio
+      dockerfile: Dockerfile
+    container_name: ms-directorio
+    ports: [ "8081:8081" ]
+    environment:
+      - SERVER_PORT=8081
+      - SPRING_DATA_MONGODB_URI=mongodb://admin:admin@directorio-db:27017/directorio_db?authSource=admin
+      - SPRING_DATA_REDIS_HOST=redis-switch
+      - SPRING_DATA_REDIS_PORT=6379
+      - TZ=UTC
+    depends_on:
+      directorio-db:
+        condition: service_healthy
+      redis-switch:
+        condition: service_healthy
+
+  ms-nucleo:
+    build:
+      context: ./MSNucleoSwitch
+      dockerfile: Dockerfile
+    container_name: ms-nucleo
+    restart: always
+    ports: [ "8082:8082" ]
+    environment:
+      - SERVER_PORT=8082
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://nucleo-db:5432/nucleo_db
+      - SPRING_DATASOURCE_USERNAME=postgres
+      - SPRING_DATASOURCE_PASSWORD=admin
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=update
+      - SPRING_REDIS_HOST=redis-switch
+      - SPRING_REDIS_PORT=6379
+      - SERVICE_DIRECTORIO_URL=http://ms-directorio:8081
+      - SERVICE_CONTABILIDAD_URL=http://ms-contabilidad:8083
+      - SERVICE_COMPENSACION_URL=http://ms-compensacion:8084
+      - SERVICE_DEVOLUCION_URL=http://ms-devolucion:8085
+    depends_on:
+      nucleo-db:
+        condition: service_healthy
+      redis-switch:
+        condition: service_healthy
+      ms-directorio:
+        condition: service_started
+
+  ms-contabilidad:
+    build:
+      context: ./Switch-ms-contabilidad
+      dockerfile: Dockerfile
+    container_name: ms-contabilidad
+    ports: [ "8083:8083" ]
+    environment:
+      - SERVER_PORT=8083
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://contabilidad-db:5432/contabilidad_db
+      - SPRING_DATASOURCE_USERNAME=postgres
+      - SPRING_DATASOURCE_PASSWORD=admin
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=update
+    depends_on:
+      contabilidad-db:
+        condition: service_healthy
+
+  ms-compensacion:
+    build:
+      context: ./MSCompensacionSwitch
+      dockerfile: Dockerfile
+    container_name: ms-compensacion
+    ports: [ "8084:8084" ]
+    environment:
+      - SERVER_PORT=8084
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://compensacion-db:5432/compensacion_db
+      - SPRING_DATASOURCE_USERNAME=postgres
+      - SPRING_DATASOURCE_PASSWORD=admin
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=update
+    depends_on:
+      compensacion-db:
+        condition: service_healthy
+
+  ms-devolucion:
+    build:
+      context: ./MSDevolucionSwitch
+      dockerfile: Dockerfile
+    container_name: ms-devolucion
+    ports: [ "8085:8085" ]
+    environment:
+      - SERVER_PORT=8085
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://devolucion-db:5432/devolucion
+      - SPRING_DATASOURCE_USERNAME=postgres
+      - SPRING_DATASOURCE_PASSWORD=admin
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=update
+    depends_on:
+      devolucion-db:
+        condition: service_healthy
+
+  switch-frontend:
+    build:
+      context: ./switch-frontend
+      dockerfile: Dockerfile
+    container_name: switch-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - ms-nucleo
+      - ms-contabilidad
+      - ms-compensacion
+
+networks:
+  default:
+    name: switch-network
+    driver: bridge

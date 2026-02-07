@@ -23,6 +23,9 @@ public class CuentaTecnica {
     @Column(name = "saldoDisponible", nullable = false, precision = 18, scale = 2)
     private BigDecimal saldoDisponible;
 
+    @Column(name = "fondosBloqueados", nullable = false, precision = 18, scale = 2)
+    private BigDecimal fondosBloqueados = BigDecimal.ZERO;
+
     @Column(name = "firmaIntegridad", nullable = false)
     private String firmaIntegridad;
 
@@ -33,6 +36,7 @@ public class CuentaTecnica {
         this.codigoBic = codigoBic;
 
         this.saldoDisponible = BigDecimal.ZERO.setScale(2, java.math.RoundingMode.HALF_UP);
+        this.fondosBloqueados = BigDecimal.ZERO.setScale(2, java.math.RoundingMode.HALF_UP);
         this.firmaIntegridad = "INITIAL_HASH";
     }
 }

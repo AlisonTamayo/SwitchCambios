@@ -110,9 +110,15 @@ export default function Contabilidad() {
                                             $ {item.cuenta.saldoDisponible.toLocaleString('en-US', { minimumFractionDigits: 2 })}
                                         </h2>
                                     </div>
-                                    <div className="pt-4 border-t border-gray-50">
+                                    <div className="pt-4 border-t border-gray-50 flex justify-between items-center">
                                         <div className="flex items-center justify-between text-xs text-gray-400 font-mono">
-                                            <span title={item.cuenta.firmaIntegridad}>SHA-256: {item.cuenta.firmaIntegridad.substring(0, 16)}...</span>
+                                            <span title={item.cuenta.firmaIntegridad}>SHA-256: {item.cuenta.firmaIntegridad.substring(0, 8)}...</span>
+                                        </div>
+                                        <div className="text-right">
+                                            <p className="text-xs text-gray-500">En Reserva (Bloqueado)</p>
+                                            <span className="text-sm font-semibold text-orange-600">
+                                                $ {item.cuenta.fondosBloqueados ? item.cuenta.fondosBloqueados.toLocaleString('en-US', { minimumFractionDigits: 2 }) : '0.00'}
+                                            </span>
                                         </div>
                                     </div>
                                 </div>

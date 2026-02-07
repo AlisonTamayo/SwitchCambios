@@ -193,12 +193,11 @@ public class TransaccionServicio {
             InstitucionDTO bancoDestinoInfo = validarBanco(bicDestino, true);
             log.info("Validación: Bancos Origen ({}) y Destino ({}) operativos.", bicOrigen, bicDestino);
 
-            log.info("Ledger: Debitando {} a {}", monto, bicOrigen);
-            registrarMovimientoContable(bicOrigen, idInstruccion, monto, "DEBIT");
-            debitRealizado = true;
+            log.info("Validación: Bancos Origen ({}) y Destino ({}) operativos.", bicOrigen, bicDestino);
 
-            log.info("Clearing: Registrando posición Origen (Débito)");
-            notificarCompensacion(bicOrigen, monto, true);
+            log.info("Ledger: Reservando fondos (Pre-Autorización) a {}", bicOrigen);
+            reservarBalance(bicOrigen, idInstruccion, monto);
+            debitRealizado = true; // Flag now indicates "Reservation Made"
 
             int[] tiemposEspera = { 0, 800, 2000, 4000 };
             boolean entregado = false;
@@ -235,11 +234,10 @@ public class TransaccionServicio {
 
                         log.info("Webhook: Entregado exitosamente.");
 
-                        log.info("Ledger: Acreditando {} a {}", monto, bicDestino);
-                        registrarMovimientoContable(bicDestino, idInstruccion, monto, "CREDIT");
+                        // NO MORE DIRECT CREDIT TO DESTINATION (Deferred)
 
-                        log.info("Clearing: Registrando posición Destino (Crédito)");
-                        notificarCompensacion(bicDestino, monto, false);
+                        log.info("Clearing: Registrando operación PAGO en ciclo abierto");
+                        registrarOperacionCompensacion(bicOrigen, bicDestino, idInstruccion, monto, "PAGO");
 
                         entregado = true;
                         log.info("Entrega: CONFIRMADA al Banco Destino. Finalizando Tx.");
@@ -665,15 +663,44 @@ public class TransaccionServicio {
         }
     }
 
-    private void notificarCompensacion(String bic, BigDecimal monto, boolean esDebito) {
+    private void reservarBalance(String bic, UUID idTx, BigDecimal monto) {
         try {
-            String url = String.format("%s/api/v1/compensacion/acumular?bic=%s&monto=%s&esDebito=%s",
-                    compensacionUrl, bic, monto.toString(), esDebito);
+            RegistroMovimientoRequest req = RegistroMovimientoRequest.builder()
+                    .codigoBic(bic)
+                    .idInstruccion(idTx)
+                    .monto(monto)
+                    .tipo("DEBIT") // Logical type for check
+                    .build();
 
-            restTemplate.postForEntity(url, null, Void.class);
+            String url = contabilidadUrl + "/api/v1/ledger/reservar";
+            restTemplate.postForEntity(url, req, Object.class);
+
+        } catch (HttpClientErrorException.BadRequest e) {
+            throw new BusinessException(IsoError.AM04.getCodigo() + " - Fondos insuficientes para reservar.");
+        } catch (Exception e) {
+            throw new BusinessException(
+                    IsoError.MS03.getCodigo() + " - Error crítico reservando fondos: " + e.getMessage());
+        }
+    }
+
+    private void registrarOperacionCompensacion(String bicEmisor, String bicReceptor, UUID idTx, BigDecimal monto,
+            String tipo) {
+        try {
+            com.bancario.nucleo.dto.external.RegistroOperacionDTO req = com.bancario.nucleo.dto.external.RegistroOperacionDTO
+                    .builder()
+                    .idInstruccion(idTx)
+                    .bicEmisor(bicEmisor)
+                    .bicReceptor(bicReceptor)
+                    .monto(monto)
+                    .tipoOperacion(tipo)
+                    .build();
+
+            String url = compensacionUrl + "/api/v1/compensacion/operaciones";
+            restTemplate.postForEntity(url, req, Void.class);
 
         } catch (Exception e) {
-            log.error("ALERTA: Fallo al registrar compensación para {}. Descuadre en Clearing.", bic, e);
+            log.error("ALERTA: Fallo al registrar operación en Clearing ({}) para {}. Descuadre posible.", tipo,
+                    bicEmisor, e);
         }
     }
 
@@ -703,17 +730,25 @@ public class TransaccionServicio {
 
     private void ejecutarReversoSaga(Transaccion tx) {
         try {
-            log.warn("SAGA COMPENSACIÓN: Iniciando reverso local para Tx {}", tx.getIdInstruccion());
+            log.warn("SAGA COMPENSACIÓN: Iniciando reverso local (release blocks) para Tx {}", tx.getIdInstruccion());
 
-            UUID reversalId = UUID.randomUUID();
-            log.info("Saga ID Mapping: Original {} -> ReversalLedgerID {}", tx.getIdInstruccion(), reversalId);
+            // 1. Register PAGO (So 'Total Debits' includes this, releasing the block in
+            // closing)
+            registrarOperacionCompensacion(tx.getCodigoBicOrigen(), tx.getCodigoBicDestino(), tx.getIdInstruccion(),
+                    tx.getMonto(), "PAGO");
 
-            registrarMovimientoContable(tx.getCodigoBicOrigen(), reversalId, tx.getMonto(), "CREDIT");
-            notificarCompensacion(tx.getCodigoBicOrigen(), tx.getMonto(), false);
+            // 2. Register REVERSO (So Net Position cancels out, refunding the user in
+            // 'Available')
+            registrarOperacionCompensacion(tx.getCodigoBicOrigen(), tx.getCodigoBicDestino(), tx.getIdInstruccion(),
+                    tx.getMonto(), "REVERSO");
+
+            // No need to manually CREDIT ledger. Cycle Closing handles it.
 
             notificarReversoAlBancoOrigen(tx);
 
-            log.info("SAGA COMPENSACIÓN: Reverso completado exitosamente.");
+            log.info(
+                    "SAGA COMPENSACIÓN: Reverso registrado en Clearing exitosamente (Funds will unblock at cycle close).");
+
         } catch (Exception e) {
             log.error("CRITICAL: Fallo en Saga de Reverso. Inconsistencia Contable posible. {}", e.getMessage());
         }
