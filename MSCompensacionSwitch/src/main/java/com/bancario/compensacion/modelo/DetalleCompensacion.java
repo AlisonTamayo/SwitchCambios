@@ -38,4 +38,8 @@ public class DetalleCompensacion {
 
     @Column(name = "estadoLiquidacion", length = 20)
     private String estadoLiquidacion; // INCLUIDO, EXCLUIDO
+
+    // Código de referencia bancario de 6 dígitos para devoluciones
+    @Column(name = "codigoReferencia", length = 6)
+    private String codigoReferencia;
 }
