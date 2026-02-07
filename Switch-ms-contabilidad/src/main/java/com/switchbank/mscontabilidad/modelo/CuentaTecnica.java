@@ -4,6 +4,7 @@ import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.UUID;
 
 @Entity
@@ -28,6 +29,10 @@ public class CuentaTecnica {
 
     @Column(name = "firmaIntegridad", nullable = false)
     private String firmaIntegridad;
+
+    // Campo agregado para cumplir con especificación DNS
+    @Column(name = "ultimaConciliacion")
+    private LocalDateTime ultimaConciliacion;
 
     public CuentaTecnica() {
     }
