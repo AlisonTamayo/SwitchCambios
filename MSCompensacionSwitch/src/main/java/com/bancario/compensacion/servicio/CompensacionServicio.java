@@ -44,6 +44,7 @@ public class CompensacionServicio {
         detalle.setBicEmisor(req.getBicEmisor());
         detalle.setBicReceptor(req.getBicReceptor());
         detalle.setMonto(req.getMonto());
+        detalle.setCodigoReferencia(req.getCodigoReferencia());
         detalle.setEstadoLiquidacion("INCLUIDO");
         detalleRepo.save(detalle);
 

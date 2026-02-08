@@ -12,4 +12,5 @@ public class RegistroOperacionDTO {
     private String bicReceptor;
     private BigDecimal monto;
     private String tipoOperacion; // PAGO, REVERSO
+    private String codigoReferencia;
 }
