@@ -10,7 +10,7 @@ public class ArchivoDTO {
     private Integer id;
     private String nombre;
     private String xmlContenido;
-    private String firmaJws;
+
     private String canalEnvio;
     private String estado;
     private LocalDateTime fechaGeneracion;

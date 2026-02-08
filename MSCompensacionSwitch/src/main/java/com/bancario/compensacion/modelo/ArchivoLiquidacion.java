@@ -23,9 +23,6 @@ public class ArchivoLiquidacion {
     @Column(name = "xml_contenido", columnDefinition = "TEXT")
     private String xmlContenido;
 
-    @Column(name = "firma_jws", columnDefinition = "TEXT")
-    private String firmaJws;
-
     @Column(name = "canal_envio")
     private String canalEnvio;
 

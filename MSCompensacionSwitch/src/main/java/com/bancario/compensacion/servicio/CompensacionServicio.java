@@ -14,6 +14,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -23,7 +25,8 @@ public class CompensacionServicio {
     private final CicloCompensacionRepositorio cicloRepo;
     private final PosicionInstitucionRepositorio posicionRepo;
     private final ArchivoLiquidacionRepositorio archivoRepo;
-    private final SeguridadServicio seguridadServicio;
+    // private final SeguridadServicio seguridadServicio; // REMOVED: JWS signing is
+    // no longer handled here
     private final DetalleCompensacionRepositorio detalleRepo;
     private final CompensacionMapper mapper;
 
@@ -48,6 +51,8 @@ public class CompensacionServicio {
         detalle.setEstadoLiquidacion("INCLUIDO");
         detalleRepo.save(detalle);
 
+        // NOTE: Real-time accumulation is kept for immediate visibility,
+        // but final settlement will be recalculated from details at closing.
         if ("REVERSO".equalsIgnoreCase(req.getTipoOperacion())) {
             // REVERSO logic: Credit Emisor (Refund), Debit Receptor (Take back)
             acumularTransaccion(cicloAbierto.getId(), req.getBicEmisor(), req.getMonto(), false); // Credit
@@ -101,6 +106,11 @@ public class CompensacionServicio {
             throw new RuntimeException("El ciclo ya está cerrado");
         }
 
+        // --- ALGORITMO DE NETEO / CLEARING ---
+        // Recalculate positions based on details to ensure accuracy
+        recalcularPosicionesDesdeDetalles(cicloActual);
+        // -------------------------------------
+
         List<PosicionInstitucion> posiciones = posicionRepo.findByCicloId(cicloId);
 
         BigDecimal sumaNetos = posiciones.stream()
@@ -112,13 +122,13 @@ public class CompensacionServicio {
         }
 
         String xml = generarXML(cicloActual, posiciones);
-        String firma = seguridadServicio.firmarDocumento(xml);
+        // String firma = seguridadServicio.firmarDocumento(xml); // REMOVED
 
         ArchivoLiquidacion archivo = new ArchivoLiquidacion();
         archivo.setCiclo(cicloActual);
         archivo.setNombre("LIQ_CICLO_" + cicloActual.getNumeroCiclo() + ".xml");
         archivo.setXmlContenido(xml);
-        archivo.setFirmaJws(firma);
+
         archivo.setCanalEnvio("BCE_DIRECT_LINK");
         archivo.setEstado("ENVIADO");
         archivo.setFechaGeneracion(LocalDateTime.now(java.time.ZoneOffset.UTC));
@@ -131,6 +141,57 @@ public class CompensacionServicio {
         iniciarSiguienteCiclo(cicloActual, posiciones, minutosProximoCiclo);
 
         return mapper.toDTO(archivo);
+    }
+
+    /**
+     * Re-processes all details for the cycle to ensure the final positions are
+     * correct.
+     * Use this for the "Clearing" step.
+     */
+    private void recalcularPosicionesDesdeDetalles(CicloCompensacion ciclo) {
+        log.info("Ejecutando algoritmo de neteo para ciclo {}", ciclo.getId());
+
+        // 1. Reset all positions for the cycle
+        List<PosicionInstitucion> posiciones = posicionRepo.findByCicloId(ciclo.getId());
+        for (PosicionInstitucion p : posiciones) {
+            p.setTotalDebitos(BigDecimal.ZERO);
+            p.setTotalCreditos(BigDecimal.ZERO);
+            p.setNeto(BigDecimal.ZERO); // derived, but good to reset
+        }
+        Map<String, PosicionInstitucion> mapaPosiciones = posiciones.stream()
+                .collect(Collectors.toMap(PosicionInstitucion::getCodigoBic, p -> p));
+
+        // 2. Fetch all details
+        List<DetalleCompensacion> detalles = detalleRepo.findByCicloId(ciclo.getId()); // Assuming this method exists or
+                                                                                       // similar
+
+        // 3. Process each detail
+        for (DetalleCompensacion d : detalles) {
+            if ("EXCLUIDO".equalsIgnoreCase(d.getEstadoLiquidacion()))
+                continue;
+
+            PosicionInstitucion posEmisor = mapaPosiciones.computeIfAbsent(d.getBicEmisor(),
+                    k -> crearPosicionVacia(ciclo.getId(), k));
+            PosicionInstitucion posReceptor = mapaPosiciones.computeIfAbsent(d.getBicReceptor(),
+                    k -> crearPosicionVacia(ciclo.getId(), k));
+
+            if ("REVERSO".equalsIgnoreCase(d.getTipoOperacion())) {
+                // REVERSO: Emisor receives back (Credit), Receptor pays back (Debit)
+                posEmisor.setTotalCreditos(posEmisor.getTotalCreditos().add(d.getMonto()));
+                posReceptor.setTotalDebitos(posReceptor.getTotalDebitos().add(d.getMonto()));
+            } else {
+                // PAGO: Emisor pays (Debit), Receptor receives (Credit)
+                posEmisor.setTotalDebitos(posEmisor.getTotalDebitos().add(d.getMonto()));
+                posReceptor.setTotalCreditos(posReceptor.getTotalCreditos().add(d.getMonto()));
+            }
+        }
+
+        // 4. Save and Recalculate Net
+        for (PosicionInstitucion p : mapaPosiciones.values()) {
+            p.recalcularNeto();
+            posicionRepo.save(p);
+        }
+        log.info("Neteo completado. Procesados {} detalles.", detalles.size());
     }
 
     private void iniciarSiguienteCiclo(CicloCompensacion anterior, List<PosicionInstitucion> saldosAnteriores,

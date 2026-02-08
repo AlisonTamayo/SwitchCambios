@@ -47,7 +47,7 @@ public class CompensacionMapper {
                 .id(entity.getId())
                 .nombre(entity.getNombre())
                 .xmlContenido(entity.getXmlContenido())
-                .firmaJws(entity.getFirmaJws())
+
                 .canalEnvio(entity.getCanalEnvio())
                 .estado(entity.getEstado())
                 .fechaGeneracion(entity.getFechaGeneracion())
